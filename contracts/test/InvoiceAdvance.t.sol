@@ -130,6 +130,20 @@ contract InvoiceAdvanceTest is Test {
         assertEq(ia.nextInvoiceId(), 1);
     }
 
+    function test_createInvoiceRejectsContractAsFreelancer() public {
+        vm.prank(client);
+        vm.expectRevert(IInvoiceAdvance.InvalidAddress.selector);
+        ia.createInvoice(address(ia), AMOUNT, META);
+        assertEq(ia.nextInvoiceId(), 1);
+    }
+
+    function test_createInvoiceRejectsPaymentTokenAsFreelancer() public {
+        vm.prank(client);
+        vm.expectRevert(IInvoiceAdvance.InvalidAddress.selector);
+        ia.createInvoice(address(token), AMOUNT, META);
+        assertEq(ia.nextInvoiceId(), 1);
+    }
+
     // ---- getInvoice ----
 
     function test_getInvoiceRevertsForUnknownIds() public {

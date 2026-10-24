@@ -46,7 +46,10 @@ contract InvoiceAdvance is IInvoiceAdvance, AccessControl, ReentrancyGuard {
         external
         returns (uint256 invoiceId)
     {
-        if (freelancer == address(0)) revert InvalidAddress();
+        if (
+            freelancer == address(0) || freelancer == address(this)
+                || freelancer == address(paymentToken)
+        ) revert InvalidAddress();
         if (freelancer == msg.sender) revert InvalidInvoiceParties();
         if (amount == 0) revert InvalidAmount();
         if (metadataHash == bytes32(0)) revert InvalidHash();

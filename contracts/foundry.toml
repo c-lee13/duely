@@ -8,6 +8,11 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
+[invariant]
+runs = 128
+depth = 100
+fail_on_revert = true
+
 [fmt]
 line_length = 100
 

@@ -1,9 +1,13 @@
-import { deployment } from "./generated/deployment"
+import { getActiveDeployment } from "./deployments"
+import { deployments as generatedDeployments } from "./generated/deployments"
+import type { DeploymentInfo } from "./deployments"
 
 /**
  * XRPL EVM Testnet configuration. Browser-safe: it only references public values.
- * Deployed addresses come from contracts/deployments/xrpl-evm-testnet.json via
- * ./generated/deployment (regenerate with `node contracts/script/export-abi.mjs`).
+ * Deployed addresses come from contracts/deployments/*.json via ./generated/deployments
+ * (regenerate with `node contracts/script/export-abi.mjs`). The active deployment (dUSD by
+ * default, RLUSD when selected) is chosen by DUELY_DEPLOYMENT; see ./deployments. Every
+ * token-specific export below is a live view of that selection.
  * The authenticated QuickNode URL (XRPL_EVM_RPC_URL) lives only in ./server.
  */
 
@@ -17,32 +21,80 @@ export const DEFAULT_PUBLIC_RPC_URL = "https://rpc.testnet.xrplevm.org"
 export const publicRpcUrl: string =
   process.env.NEXT_PUBLIC_XRPL_EVM_RPC_URL || DEFAULT_PUBLIC_RPC_URL
 
+/** The active deployment, re-resolved on every call. Prefer this in new code. */
+export function activeDeployment(): DeploymentInfo {
+  return getActiveDeployment()
+}
+
+/** Defines `target[key]` as a getter so legacy constant-style exports follow the selection. */
+function view<T extends object>(getters: { [K in keyof T]: () => T[K] }): T {
+  const out = {} as T
+  for (const key of Object.keys(getters) as (keyof T)[]) {
+    Object.defineProperty(out, key, {
+      enumerable: true,
+      get: getters[key],
+    })
+  }
+  return out
+}
+
 /** Shape-compatible with viem's `Chain` and wagmi's chain config. */
-export const xrplEvmTestnet = {
-  id: deployment.chainId,
-  name: "XRPL EVM Testnet",
-  nativeCurrency: { name: "XRP", symbol: "XRP", decimals: 18 },
-  rpcUrls: { default: { http: [publicRpcUrl] } },
-  blockExplorers: {
-    default: { name: "XRPL EVM Explorer", url: deployment.explorer },
+export const xrplEvmTestnet = view({
+  id: () => getActiveDeployment().chainId,
+  name: () => "XRPL EVM Testnet",
+  nativeCurrency: () => ({ name: "XRP", symbol: "XRP", decimals: 18 }),
+  rpcUrls: () => ({ default: { http: [publicRpcUrl] } }),
+  blockExplorers: () => ({
+    default: {
+      name: "XRPL EVM Explorer",
+      url: getActiveDeployment().explorer,
+    },
+  }),
+  testnet: () => true as const,
+})
+
+/**
+ * XRPL EVM Testnet chain id. export-abi.mjs rejects any deployment on another chain, so this is
+ * the same for every selectable deployment.
+ */
+export const CHAIN_ID = generatedDeployments.dusd.chainId
+
+export const contractAddresses = view({
+  invoiceAdvance: () =>
+    getActiveDeployment().invoiceAdvance.address as HexAddress,
+  paymentToken: () => getActiveDeployment().token.address as HexAddress,
+})
+
+/**
+ * Payment token metadata of the active deployment. dUSD is a mock (`isDemoToken: true`); RLUSD is
+ * an issuer-controlled token (`isDemoToken: false`). Never present a mock as USDC or RLUSD.
+ */
+export const paymentTokenInfo = view({
+  name: () => getActiveDeployment().token.name,
+  symbol: () => getActiveDeployment().token.symbol,
+  decimals: () => getActiveDeployment().token.decimals,
+  isDemoToken: () => getActiveDeployment().token.isDemoToken,
+  kind: () => getActiveDeployment().token.kind,
+})
+
+/**
+ * Legacy `deployment` shape (as generated for dUSD) for the active deployment. Kept so existing
+ * consumers such as `deployment.roles.operator` keep working for either token.
+ */
+export const deployment = view({
+  chainId: () => getActiveDeployment().chainId,
+  network: () => getActiveDeployment().network,
+  explorer: () => getActiveDeployment().explorer,
+  sourceCommit: () => getActiveDeployment().sourceCommit,
+  contracts: () => {
+    const d = getActiveDeployment()
+    return {
+      invoiceAdvance: { ...d.invoiceAdvance },
+      paymentToken: { ...d.token },
+    }
   },
-  testnet: true,
-} as const
-
-export const CHAIN_ID = deployment.chainId
-
-export const contractAddresses = {
-  invoiceAdvance: deployment.contracts.invoiceAdvance.address as HexAddress,
-  paymentToken: deployment.contracts.paymentToken.address as HexAddress,
-} as const
-
-/** Demo token metadata. It is a mock: never present it as USDC or RLUSD. */
-export const paymentTokenInfo = {
-  name: deployment.contracts.paymentToken.name,
-  symbol: deployment.contracts.paymentToken.symbol,
-  decimals: deployment.contracts.paymentToken.decimals,
-  isDemoToken: deployment.contracts.paymentToken.isDemoToken,
-} as const
+  roles: () => getActiveDeployment().roles,
+})
 
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
@@ -58,14 +110,14 @@ export function explorerTxUrl(txHash: string): string {
       "explorerTxUrl: expected a 32-byte hex transaction hash"
     )
   }
-  return `${deployment.explorer}/tx/${txHash}`
+  return `${getActiveDeployment().explorer}/tx/${txHash}`
 }
 
 export function explorerAddressUrl(address: string): string {
   if (typeof address !== "string" || !ADDRESS.test(address)) {
     throw new TypeError("explorerAddressUrl: expected a 20-byte hex address")
   }
-  return `${deployment.explorer}/address/${address}`
+  return `${getActiveDeployment().explorer}/address/${address}`
 }
 
 export function explorerBlockUrl(blockNumber: bigint | number): string {
@@ -79,7 +131,7 @@ export function explorerBlockUrl(blockNumber: bigint | number): string {
   if (n < BigInt(0)) {
     throw new TypeError("explorerBlockUrl: expected a non-negative integer")
   }
-  return `${deployment.explorer}/block/${n.toString(10)}`
+  return `${getActiveDeployment().explorer}/block/${n.toString(10)}`
 }
 
 export function tryExplorerTxUrl(txHash: string): string | null {

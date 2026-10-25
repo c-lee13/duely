@@ -1,4 +1,5 @@
 import { advanceAmountFor, formatDusd } from "../../lib/chain/amounts"
+import { paymentTokenInfo } from "../../lib/chain/config"
 
 /**
  * Pure planning logic for the live integration run: given a snapshot of on-chain state, decide
@@ -53,13 +54,23 @@ export interface Snapshot {
   gasBalance: Record<Signer, bigint>
   /** Wei per gas. */
   gasPrice: bigint
+  /**
+   * When the reserve has to be funded, deposit up to this much (never less than the advance). The
+   * reserve is funded once and then reused: a settled invoice repays its advance, so later runs
+   * find enough reserve and deposit nothing. Unset = deposit only the exact shortfall.
+   */
+  reserveTarget?: bigint
+  /** True when the payment token is pausable and currently paused (nothing can move). */
+  tokenPaused?: boolean
 }
 
 export interface Plan {
   amount: bigint
   advance: bigint
-  /** Extra reserve the operator must deposit so the advance can be paid (0 if already enough). */
+  /** Minimum extra reserve needed so the advance can be paid (0 if already enough). */
   reserveShortfall: bigint
+  /** What the operator actually deposits: 0 if the reserve already covers the advance, else up to the target. */
+  reserveDeposit: bigint
   steps: PlanStep[]
   txCountBySigner: Record<Signer, number>
   totalTransactions: number
@@ -80,13 +91,19 @@ export function buildPlan(s: Snapshot): Plan {
   const advance = advanceAmountFor(s.amount)
   const shortfall =
     s.reserveBalance >= advance ? zero : advance - s.reserveBalance
-  const reserveAfterTopUp = s.reserveBalance + shortfall
+  const deposit =
+    shortfall === zero
+      ? zero
+      : (s.reserveTarget !== undefined && s.reserveTarget > advance
+          ? s.reserveTarget
+          : advance) - s.reserveBalance
+  const reserveAfterTopUp = s.reserveBalance + deposit
   const needsClientApproval = s.clientAllowance < s.amount
 
   const steps: PlanStep[] = []
   steps.push({
     id: "createInvoice",
-    label: `Create invoice for ${formatDusd(s.amount)} dUSD`,
+    label: `Create invoice for ${formatDusd(s.amount)} ${paymentTokenInfo.symbol}`,
     signer: "client",
     checkpoint: {
       invoiceStatus: "Created",
@@ -98,7 +115,7 @@ export function buildPlan(s: Snapshot): Plan {
   if (needsClientApproval) {
     steps.push({
       id: "approveEscrow",
-      label: `Approve exactly ${formatDusd(s.amount)} dUSD to InvoiceAdvance`,
+      label: `Approve exactly ${formatDusd(s.amount)} ${paymentTokenInfo.symbol} to InvoiceAdvance`,
       signer: "client",
       checkpoint: { clientAllowance: s.amount },
     })
@@ -114,23 +131,23 @@ export function buildPlan(s: Snapshot): Plan {
       reserve: s.reserveBalance,
     },
   })
-  if (shortfall > zero) {
+  if (deposit > zero) {
     steps.push({
       id: "operatorApprove",
-      label: `Operator approves ${formatDusd(shortfall)} dUSD for the reserve top-up`,
+      label: `Operator approves ${formatDusd(deposit)} ${paymentTokenInfo.symbol} for the reserve deposit`,
       signer: "operator",
-      checkpoint: { operatorAllowance: shortfall },
+      checkpoint: { operatorAllowance: deposit },
     })
     steps.push({
       id: "depositReserve",
-      label: `Operator deposits ${formatDusd(shortfall)} dUSD into the reserve`,
+      label: `Operator deposits ${formatDusd(deposit)} ${paymentTokenInfo.symbol} into the reserve`,
       signer: "operator",
       checkpoint: { reserve: reserveAfterTopUp },
     })
   }
   steps.push({
     id: "approveAdvance",
-    label: `Evaluator approves the 90% advance (${formatDusd(advance)} dUSD)`,
+    label: `Evaluator approves the 90% advance (${formatDusd(advance)} ${paymentTokenInfo.symbol})`,
     signer: "evaluator",
     checkpoint: {
       invoiceStatus: "Advanced",
@@ -147,7 +164,7 @@ export function buildPlan(s: Snapshot): Plan {
     escrow: s.totalEscrow,
     clientDusd: s.clientDusd - s.amount,
     freelancerDusd: s.freelancerDusd + s.amount,
-    contractDusd: s.contractDusd + shortfall,
+    contractDusd: s.contractDusd + deposit,
   }
   steps.push({
     id: "approveCompletion",
@@ -177,12 +194,21 @@ export function buildPlan(s: Snapshot): Plan {
   }
   if (s.clientDusd < s.amount) {
     blockers.push(
-      `client holds ${formatDusd(s.clientDusd)} dUSD but needs ${formatDusd(s.amount)} dUSD to fund the invoice. This script never mints or transfers funds; the dUSD token owner must mint ${formatDusd(s.amount - s.clientDusd)} dUSD to the client first.`
+      `client holds ${formatDusd(s.clientDusd)} ${paymentTokenInfo.symbol} but needs ${formatDusd(s.amount)} ${paymentTokenInfo.symbol} to fund the invoice. This script never mints or transfers funds; ${
+        paymentTokenInfo.kind === "mock"
+          ? `the ${paymentTokenInfo.symbol} token owner must mint ${formatDusd(s.amount - s.clientDusd)} ${paymentTokenInfo.symbol} to the client first.`
+          : `${paymentTokenInfo.symbol} is issuer-controlled and cannot be minted by us: fund the client from a wallet that already holds it, or use a smaller --amount.`
+      }`
     )
   }
-  if (shortfall > zero && s.operatorDusd < shortfall) {
+  if (deposit > zero && s.operatorDusd < deposit) {
     blockers.push(
-      `the reserve holds ${formatDusd(s.reserveBalance)} dUSD, ${formatDusd(shortfall)} dUSD short of the advance, and the operator holds only ${formatDusd(s.operatorDusd)} dUSD to top it up`
+      `the reserve holds ${formatDusd(s.reserveBalance)} ${paymentTokenInfo.symbol}, ${formatDusd(shortfall)} ${paymentTokenInfo.symbol} short of the advance, and the operator holds only ${formatDusd(s.operatorDusd)} ${paymentTokenInfo.symbol} to deposit ${formatDusd(deposit)} ${paymentTokenInfo.symbol} into it (this script never transfers or replenishes funds)`
+    )
+  }
+  if (s.tokenPaused) {
+    blockers.push(
+      `${paymentTokenInfo.symbol} is paused by its issuer: no transfer or approval can succeed until it is unpaused`
     )
   }
   for (const signer of ["client", "evaluator", "operator"] as const) {
@@ -200,6 +226,7 @@ export function buildPlan(s: Snapshot): Plan {
     amount: s.amount,
     advance,
     reserveShortfall: shortfall,
+    reserveDeposit: deposit,
     steps,
     txCountBySigner,
     totalTransactions: steps.length,

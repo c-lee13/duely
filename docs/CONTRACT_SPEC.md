@@ -13,7 +13,7 @@
 - **Funding:** client approves ERC-20 spending, then calls `fundInvoice`. The platform separately deposits reserve tokens.
 - **Submission / evaluation:** off-chain only; the evaluator signer submits `approveAdvance` only after an authenticated freelancer request and a persisted passing evaluation.
 - **Final approval:** client wallet calls `approveCompletion`; disputed invoices require trusted operator resolution.
-- **Single-token assumption:** the token is a mock six-decimal ERC-20 on testnet unless a supported token is independently verified. Do not label mock tokens as RLUSD.
+- **One token per deployment:** each `InvoiceAdvance` has one immutable ERC-20. Two deployments exist on XRPL EVM testnet: dUSD (mock, 6 decimals) and RLUSD (`0x27b57a9D0b8d24EB97259c4E2279e45255e016f3`, 18 decimals, verified live in A6.6.4b). Do not label a mock as RLUSD, or RLUSD as a demo token. Unlike dUSD, RLUSD is issuer-controlled: the issuer can pause (funding, advances and settlement then revert until unpaused), claw back (which can leave the contract undercollateralised) and upgrade it. The contract cannot mitigate this.
 - **Interface freeze:** Track B must agree to the `createInvoice(freelancer, amount, metadataHash)` signature, event fields, enum order, metadata hashing procedure, and contract address before parallel integration.
 
 ## 1. Scope and financial model
@@ -22,7 +22,7 @@ Duely advances **90% of a fully client-funded invoice** to a freelancer after an
 
 **Explicit MVP assumptions**
 
-- One immutable ERC-20 payment token selected at deployment (mock USDC, 6 decimals on testnet).
+- One immutable ERC-20 payment token selected at deployment (dUSD mock, 6 decimals, or RLUSD, 18 decimals, on testnet). All logic is decimals-agnostic integer base-unit math, so the 90% advance is identical at both.
 - One contract holds all invoice escrow and reserve tokens, but maintains separate accounting.
 - Full client pre-funding is mandatory before any advance; no partial funding or installment payments.
 - Exactly one advance per invoice, fixed at `floor(amount * 9000 / 10000)` in token base units.
@@ -381,7 +381,7 @@ getAvailableReserve(publicClient)
 ## 12. Out of scope / deferred decisions
 
 - Unfunded invoice financing, credit underwriting, and nonpayment risk beyond dispute/refund.
-- Multi-token support, token price oracles, swaps, FX, or native XRP transfers.
+- Multiple tokens inside one contract (each token needs its own deployment), token price oracles, swaps, FX, or native XRP transfers.
 - Reserve depositor shares, third-party lending vaults, interest, yield, and liquidation.
 - Partial approvals, milestone-based escrow, split payouts, or multiple advances.
 - Automated dispute adjudication, arbitration evidence, deadlines, or client nonresponse rules.

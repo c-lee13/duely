@@ -1,10 +1,22 @@
-import { isAddress, keccak256, stringToHex, zeroHash, type Hex } from "viem"
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  ExecutionRevertedError,
+  RawContractError,
+  isAddress,
+  keccak256,
+  stringToHex,
+  zeroHash,
+  type Hex,
+} from "viem"
 
 import { MAX_UINT256 } from "./amounts"
 import { getPublicClient, type ChainReader } from "./client"
 import { contractAddresses, type HexAddress } from "./config"
 import { ChainReadError, toChainReadError } from "./errors"
-import { invoiceAdvanceAbi, mockUsdcAbi } from "./generated"
+import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
+import { tokenPauseAbi } from "./token-pause"
 
 /**
  * Read-only SDK over InvoiceAdvance and MockUSDC. No wallet or signing is involved; on-chain
@@ -280,14 +292,14 @@ export async function getPaymentTokenAddress(
 
 // ---- token -----------------------------------------------------------------------------------
 
-/** MockUSDC `name()`, `symbol()`, `decimals()`. */
+/** Payment token `name()`, `symbol()`, `decimals()`. */
 export async function getTokenMetadata(
   opts?: ReadOptions
 ): Promise<TokenMetadata> {
   const client = readerOf(opts)
   const base = {
     address: contractAddresses.paymentToken,
-    abi: mockUsdcAbi,
+    abi: paymentTokenAbi,
     blockNumber: opts?.blockNumber,
   } as const
   const [name, symbol, decimals] = await guarded("token metadata", () =>
@@ -300,7 +312,7 @@ export async function getTokenMetadata(
   return { name, symbol, decimals }
 }
 
-/** MockUSDC `balanceOf(account)`, base units. */
+/** Payment token `balanceOf(account)`, base units. */
 export async function getTokenBalance(
   account: string,
   opts?: ReadOptions
@@ -309,7 +321,7 @@ export async function getTokenBalance(
   return guarded("balanceOf", () =>
     readerOf(opts).readContract({
       address: contractAddresses.paymentToken,
-      abi: mockUsdcAbi,
+      abi: paymentTokenAbi,
       functionName: "balanceOf",
       args: [address],
       blockNumber: opts?.blockNumber,
@@ -317,7 +329,7 @@ export async function getTokenBalance(
   )
 }
 
-/** MockUSDC `allowance(owner, spender)`, base units. */
+/** Payment token `allowance(owner, spender)`, base units. */
 export async function getTokenAllowance(
   owner: string,
   spender: string,
@@ -328,12 +340,52 @@ export async function getTokenAllowance(
   return guarded("allowance", () =>
     readerOf(opts).readContract({
       address: contractAddresses.paymentToken,
-      abi: mockUsdcAbi,
+      abi: paymentTokenAbi,
       functionName: "allowance",
       args: [ownerAddress, spenderAddress],
       blockNumber: opts?.blockNumber,
     })
   )
+}
+
+export interface TokenPauseStatus {
+  /** False when the token has no `paused()` (e.g. MockUSDC); `paused` is then false. */
+  supported: boolean
+  paused: boolean
+}
+
+/**
+ * Whether the payment token is currently paused. Pausing is an RLUSD-issuer control; MockUSDC does
+ * not implement it, which is reported as `supported: false` rather than an error. Other failures
+ * (RPC down, wrong chain) still throw.
+ */
+export async function getTokenPauseStatus(
+  opts?: ReadOptions
+): Promise<TokenPauseStatus> {
+  try {
+    const paused = await readerOf(opts).readContract({
+      address: contractAddresses.paymentToken,
+      abi: tokenPauseAbi,
+      functionName: "paused",
+      blockNumber: opts?.blockNumber,
+    })
+    return { supported: true, paused }
+  } catch (error) {
+    if (
+      error instanceof BaseError &&
+      error.walk(
+        (e) =>
+          e instanceof ContractFunctionRevertedError ||
+          e instanceof ContractFunctionZeroDataError ||
+          // A node answering "execution reverted" with no data (a token without paused())
+          e instanceof RawContractError ||
+          e instanceof ExecutionRevertedError
+      )
+    ) {
+      return { supported: false, paused: false }
+    }
+    throw toChainReadError(error, "paused")
+  }
 }
 
 /** Allowance a client has granted to InvoiceAdvance (needed before `fundInvoice`). */

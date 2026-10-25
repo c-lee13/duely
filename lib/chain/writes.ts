@@ -21,8 +21,13 @@ import {
   CHAIN_ID,
   contractAddresses,
   explorerTxUrl,
+  paymentTokenInfo,
   type HexAddress,
 } from "./config"
+import {
+  activeDeploymentIdentity,
+  type DeploymentIdentity,
+} from "./deployments"
 import { expectedFor, type ExpectedReceipt } from "./expected"
 import {
   ChainReadError,
@@ -30,13 +35,15 @@ import {
   redactUrls,
   type ChainWriteErrorCode,
 } from "./errors"
-import { invoiceAdvanceAbi, mockUsdcAbi } from "./generated"
+import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
+import { tokenPauseAbi } from "./token-pause"
 import {
   INVOICE_STATUSES,
   getEscrowAllowance,
   getInvoice,
   getTokenAllowance,
   getTokenBalance,
+  getTokenPauseStatus,
   hasRole,
   parseInvoiceId,
   type InvoiceDetails,
@@ -44,7 +51,7 @@ import {
 } from "./reads"
 
 /**
- * Typed write layer for InvoiceAdvance and the dUSD token. Framework-agnostic and browser-safe:
+ * Typed write layer for InvoiceAdvance and the payment token. Framework-agnostic and browser-safe:
  * it holds no keys and no server credentials. The CALLER supplies a viem WalletClient already
  * connected to the right account:
  *   - Track B (browser): a wallet client for the user's connected wallet, e.g.
@@ -111,6 +118,11 @@ export interface SubmittedTransaction {
   submittedAt: number
   /** Link to the transaction on the block explorer. */
   explorerUrl: string
+  /**
+   * The deployment (dUSD or RLUSD) this was submitted under. Tracking it under another active
+   * deployment fails with DEPLOYMENT_MISMATCH. Absent only on legacy (version 1) records.
+   */
+  deployment?: DeploymentIdentity
 }
 
 export type SignerRole = "client" | "operator" | "evaluator" | "token-holder"
@@ -134,14 +146,21 @@ type InvoiceAdvanceWriteName = Extract<
   { type: "function"; stateMutability: "nonpayable" }
 >["name"]
 type TokenWriteName = Extract<
-  (typeof mockUsdcAbi)[number],
+  (typeof paymentTokenAbi)[number],
   { type: "function"; stateMutability: "nonpayable" }
 >["name"]
 
 // Token errors are added to the decode ABI so reverts bubbling up from SafeERC20 are readable.
 const INVOICE_ADVANCE_DECODE_ABI = [
   ...invoiceAdvanceAbi,
-  ...mockUsdcAbi.filter((item) => item.type === "error"),
+  ...paymentTokenAbi.filter((item) => item.type === "error"),
+  ...tokenPauseAbi.filter((item) => item.type === "error"),
+] as Abi
+
+// Token calls are simulated against this ABI, so a paused token's revert decodes as EnforcedPause.
+const TOKEN_CALL_ABI = [
+  ...paymentTokenAbi,
+  ...tokenPauseAbi.filter((item) => item.type === "error"),
 ] as Abi
 
 // ---- validation ------------------------------------------------------------------------------
@@ -267,6 +286,7 @@ export function mapWriteError(
         code = "INSUFFICIENT_ALLOWANCE"
       else if (name === "ERC20InsufficientBalance")
         code = "INSUFFICIENT_BALANCE"
+      else if (name === "EnforcedPause") code = "TOKEN_PAUSED"
       return new ChainWriteError(
         code,
         `${label} would revert: ${describeRevert(name, args)}`,
@@ -549,6 +569,7 @@ async function submit(
       expected: call.expected(account),
       submittedAt: Date.now(),
       explorerUrl: explorerTxUrl(hash),
+      deployment: activeDeploymentIdentity(),
     }
   } catch (error) {
     if (!entry.hash) {
@@ -729,7 +750,7 @@ export interface ApproveTokenInput {
 function approveCall(spender: HexAddress, amount: bigint, label: string): Call {
   return {
     address: contractAddresses.paymentToken,
-    abi: mockUsdcAbi as Abi,
+    abi: TOKEN_CALL_ABI,
     functionName: "approve",
     args: [spender, amount],
     label,
@@ -786,14 +807,14 @@ async function assertTokenCovers(
   if (allowance < required) {
     throw new ChainWriteError(
       "INSUFFICIENT_ALLOWANCE",
-      `${label}: dUSD allowance to InvoiceAdvance is ${allowance} but ${required} is required (base units); approve it with approveEscrowAllowance first`,
+      `${label}: ${paymentTokenInfo.symbol} allowance to InvoiceAdvance is ${allowance} but ${required} is required (base units); approve it with approveEscrowAllowance first`,
       { revertName: "ERC20InsufficientAllowance" }
     )
   }
   if (balance < required) {
     throw new ChainWriteError(
       "INSUFFICIENT_BALANCE",
-      `${label}: dUSD balance is ${balance} but ${required} is required (base units)`,
+      `${label}: ${paymentTokenInfo.symbol} balance is ${balance} but ${required} is required (base units)`,
       { revertName: "ERC20InsufficientBalance" }
     )
   }
@@ -954,6 +975,8 @@ export interface FundInvoiceReadiness {
   invoice: InvoiceDetails
   allowance: AllowanceStatus
   balance: bigint
+  /** True when the token supports pausing and is paused (RLUSD issuer control). */
+  tokenPaused: boolean
   ready: boolean
   /** Human-readable reasons `fundInvoice` would currently fail. */
   blockers: string[]
@@ -968,11 +991,15 @@ export async function prepareFundInvoice(
   const id = assertId(invoiceId)
   const owner = assertAddress(account, "account")
   const invoice = await getInvoice(id, opts)
-  const [allowance, balance] = await Promise.all([
+  const [allowance, balance, pause] = await Promise.all([
     getAllowanceStatus(owner, invoice.amount, opts),
     getTokenBalance(owner, opts),
+    getTokenPauseStatus(opts),
   ])
   const blockers: string[] = []
+  if (pause.paused) {
+    blockers.push(`${paymentTokenInfo.symbol} is paused by its issuer`)
+  }
   if (invoice.client.toLowerCase() !== owner.toLowerCase()) {
     blockers.push("account is not the invoice client")
   }
@@ -980,18 +1007,29 @@ export async function prepareFundInvoice(
     blockers.push(`invoice status is ${invoice.statusName}, expected Created`)
   if (!allowance.sufficient) {
     blockers.push(
-      `approve ${allowance.shortfall} more base units of dUSD to InvoiceAdvance`
+      `approve ${allowance.shortfall} more base units of ${paymentTokenInfo.symbol} to InvoiceAdvance`
     )
   }
   if (balance < invoice.amount)
-    blockers.push("dUSD balance is below the invoice amount")
-  return { invoice, allowance, balance, ready: blockers.length === 0, blockers }
+    blockers.push(
+      `${paymentTokenInfo.symbol} balance is below the invoice amount`
+    )
+  return {
+    invoice,
+    allowance,
+    balance,
+    tokenPaused: pause.paused,
+    ready: blockers.length === 0,
+    blockers,
+  }
 }
 
 export interface DepositReserveReadiness {
   isOperator: boolean
   allowance: AllowanceStatus
   balance: bigint
+  /** True when the token supports pausing and is paused (RLUSD issuer control). */
+  tokenPaused: boolean
   ready: boolean
   blockers: string[]
 }
@@ -1004,23 +1042,31 @@ export async function prepareDepositReserve(
 ): Promise<DepositReserveReadiness> {
   const value = assertAmount(amount, "amount")
   const owner = assertAddress(account, "account")
-  const [isOperator, allowance, balance] = await Promise.all([
+  const [isOperator, allowance, balance, pause] = await Promise.all([
     hasRole("operator", owner, opts),
     getAllowanceStatus(owner, value, opts),
     getTokenBalance(owner, opts),
+    getTokenPauseStatus(opts),
   ])
   const blockers: string[] = []
+  if (pause.paused) {
+    blockers.push(`${paymentTokenInfo.symbol} is paused by its issuer`)
+  }
   if (!isOperator) blockers.push("account does not hold OPERATOR_ROLE")
   if (!allowance.sufficient) {
     blockers.push(
-      `approve ${allowance.shortfall} more base units of dUSD to InvoiceAdvance`
+      `approve ${allowance.shortfall} more base units of ${paymentTokenInfo.symbol} to InvoiceAdvance`
     )
   }
-  if (balance < value) blockers.push("dUSD balance is below the deposit amount")
+  if (balance < value)
+    blockers.push(
+      `${paymentTokenInfo.symbol} balance is below the deposit amount`
+    )
   return {
     isOperator,
     allowance,
     balance,
+    tokenPaused: pause.paused,
     ready: blockers.length === 0,
     blockers,
   }

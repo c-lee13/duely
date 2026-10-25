@@ -65,7 +65,14 @@ export type {
   UnverifiedStatus,
   WaitOptions,
 } from "./lifecycle"
+export { tokenPauseAbi } from "./token-pause"
 export { EXPECTED_EVENTS } from "./expected"
 export type { WriteFunctionName } from "./expected"
 
-export { invoiceAdvanceAbi, mockUsdcAbi, deployment } from "./generated"
+export {
+  invoiceAdvanceAbi,
+  mockUsdcAbi,
+  paymentTokenAbi,
+  deployments as generatedDeployments,
+} from "./generated"
+export * from "./deployments"

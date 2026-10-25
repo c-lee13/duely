@@ -5,4 +5,6 @@
 
 export { invoiceAdvanceAbi } from "./invoiceAdvanceAbi"
 export { mockUsdcAbi } from "./mockUsdcAbi"
+export { paymentTokenAbi } from "./paymentTokenAbi"
 export { deployment } from "./deployment"
+export { deployments } from "./deployments"

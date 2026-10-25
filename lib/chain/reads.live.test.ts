@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { parseDusd } from "./amounts"
+import { MAX_UINT256, advanceAmountFor, parseDusd } from "./amounts"
 import { createChainPublicClient, type ChainReader } from "./client"
 import { CHAIN_ID, contractAddresses } from "./config"
 import { ChainReadError } from "./errors"
@@ -13,11 +13,9 @@ import {
   getNextInvoiceId,
   getOnchainRoleIds,
   getPaymentTokenAddress,
-  getReserveBalance,
   getReserveSnapshot,
   getTokenBalance,
   getTokenMetadata,
-  getTotalEscrow,
   hasRole,
 } from "./reads"
 
@@ -83,24 +81,74 @@ for (const { label, client } of targets) {
         assert.notEqual(inv.evaluationHash, "0x" + "00".repeat(32))
       })
 
-      it("reserve is 10,000 dUSD, escrow is 0, and the contract is solvent", async () => {
-        assert.equal(await getReserveBalance(opts), parseDusd("10000"))
-        assert.equal(await getTotalEscrow(opts), BigInt(0))
-        const snap = await getReserveSnapshot(opts)
-        assert.equal(snap.reserveBalance, parseDusd("10000"))
-        assert.equal(snap.totalEscrow, BigInt(0))
-        assert.equal(snap.contractTokenBalance, parseDusd("10000"))
+      it("escrow and reserve accounting are consistent with every invoice, at one pinned block", async () => {
+        const block = await client!.getBlockNumber()
+        const pinned = { client, blockNumber: block }
+        const [snap, next] = await Promise.all([
+          getReserveSnapshot(pinned),
+          getNextInvoiceId(pinned),
+        ])
+        let expectedEscrow = BigInt(0)
+        for (let id = BigInt(1); id < next; id++) {
+          const inv = await getInvoice(id, pinned)
+          // Escrow is held for Funded, Advanced and Disputed invoices only.
+          if (["Funded", "Advanced", "Disputed"].includes(inv.statusName)) {
+            expectedEscrow += inv.amount
+          }
+          // An advance is always exactly 90% (floor) of the invoice, or zero.
+          if (inv.advanceAmount > BigInt(0)) {
+            assert.equal(inv.advanceAmount, advanceAmountFor(inv.amount))
+            assert.equal(
+              ["Advanced", "Settled", "Disputed"].includes(inv.statusName),
+              true,
+              `invoice ${id} has an advance but is ${inv.statusName}`
+            )
+          }
+        }
+        assert.equal(snap.totalEscrow, expectedEscrow)
+        assert.equal(
+          snap.reserveBalance + snap.totalEscrow <= snap.contractTokenBalance,
+          true,
+          "contract must hold at least reserve + escrow"
+        )
         assert.equal(snap.solvent, true)
       })
 
-      it("freelancer holds 1,000 dUSD; client and operator hold 0; client allowance is spent", async () => {
+      it("balances and allowances are consistent with the invoice history", async () => {
+        const block = await client!.getBlockNumber()
+        const pinned = { client, blockNumber: block }
+        const next = await getNextInvoiceId(pinned)
+        let settledToFreelancer = BigInt(0)
+        let clientCreated = BigInt(0)
+        for (let id = BigInt(1); id < next; id++) {
+          const inv = await getInvoice(id, pinned)
+          if (
+            inv.statusName === "Settled" &&
+            inv.freelancer === EXPECTED.freelancer
+          ) {
+            settledToFreelancer += inv.amount
+          }
+          if (inv.statusName === "Created" && inv.client === EXPECTED.client) {
+            clientCreated += inv.amount
+          }
+        }
+        // The freelancer received at least every settled invoice (it may hold more).
         assert.equal(
-          await getTokenBalance(EXPECTED.freelancer, opts),
-          parseDusd("1000")
+          (await getTokenBalance(EXPECTED.freelancer, pinned)) >=
+            settledToFreelancer,
+          true
         )
-        assert.equal(await getTokenBalance(EXPECTED.client, opts), BigInt(0))
-        assert.equal(await getTokenBalance(EXPECTED.operator, opts), BigInt(0))
-        assert.equal(await getEscrowAllowance(EXPECTED.client, opts), BigInt(0))
+        // Approvals are exact: the client never has more allowance than its unfunded invoices.
+        assert.equal(
+          (await getEscrowAllowance(EXPECTED.client, pinned)) <= clientCreated,
+          true
+        )
+        assert.equal(
+          (await getEscrowAllowance(EXPECTED.client, pinned)) <
+            MAX_UINT256 / BigInt(2),
+          true,
+          "no unlimited approval"
+        )
       })
 
       it("token metadata is the labeled demo token", async () => {
@@ -111,8 +159,13 @@ for (const { label, client } of targets) {
         })
       })
 
-      it("nextInvoiceId is 2 after the single smoke-test invoice", async () => {
-        assert.equal(await getNextInvoiceId(opts), BigInt(2))
+      it("nextInvoiceId is one past the last invoice, and every earlier id decodes", async () => {
+        const next = await getNextInvoiceId(opts)
+        assert.equal(next >= BigInt(2), true, "at least the smoke-test invoice")
+        for (let id = BigInt(1); id < next; id++) {
+          assert.equal((await getInvoice(id, opts)).invoiceId, id)
+        }
+        assert.equal(await findInvoice(next, opts), null)
       })
 
       it("roles match the deployment, and the static role ids equal the contract getters", async () => {
@@ -129,10 +182,11 @@ for (const { label, client } of targets) {
       })
 
       it("nonexistent and invalid invoice IDs are reported distinctly", async () => {
-        assert.equal(await findInvoice(2, opts), null)
+        const missing = (await getNextInvoiceId(opts)) + BigInt(1)
+        assert.equal(await findInvoice(missing, opts), null)
         assert.equal(await findInvoice("999999", opts), null)
         await assert.rejects(
-          getInvoice(2, opts),
+          getInvoice(missing, opts),
           (e) => e instanceof ChainReadError && e.code === "INVOICE_NOT_FOUND"
         )
         await assert.rejects(

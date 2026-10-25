@@ -14,6 +14,7 @@
 import {
   contractAddresses,
   createChainPublicClient,
+  paymentTokenInfo,
   redactUrls,
 } from "../lib/chain/index"
 import { USAGE, parseArgs } from "./chain-integration/args"
@@ -63,7 +64,15 @@ async function main(): Promise<number> {
       return 0
     }
     line(`NOT READY: ${failed.length} check(s) failed.`)
-    if (plan && plan.blockers.some((b) => b.includes("never mints"))) {
+    if (
+      plan &&
+      paymentTokenInfo.kind !== "mock" &&
+      plan.blockers.some((b) => b.includes("never mints"))
+    ) {
+      line(
+        `${paymentTokenInfo.symbol} is issuer-controlled: this script cannot issue it. Get test funds for the client elsewhere (issuer faucet or a funded wallet), or choose a smaller --amount.`
+      )
+    } else if (plan && plan.blockers.some((b) => b.includes("never mints"))) {
       const short = plan.amount - pre.snapshot!.clientDusd
       line(
         "The dUSD token owner (deployer keystore) must fund the client first, e.g. in contracts/:"

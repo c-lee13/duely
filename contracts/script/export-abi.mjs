@@ -28,6 +28,7 @@ const contractsDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(contractsDir, "..")
 const outDir = join(repoRoot, "lib", "chain", "generated")
 const manifestPath = join(contractsDir, "deployments", "xrpl-evm-testnet.json")
+const externalTokensPath = join(contractsDir, "deployments", "external-tokens.json")
 
 const EXPECTED_CHAIN_ID = 1449000
 
@@ -219,12 +220,127 @@ const indexTs =
   HEADER("Barrel for generated chain artifacts.", "contracts/script/export-abi.mjs") +
   `export { invoiceAdvanceAbi } from "./invoiceAdvanceAbi"\n` +
   `export { mockUsdcAbi } from "./mockUsdcAbi"\n` +
-  `export { deployment } from "./deployment"\n`
+  `export { paymentTokenAbi } from "./paymentTokenAbi"\n` +
+  `export { deployment } from "./deployment"\n` +
+  `export { deployments } from "./deployments"\n`
+
+// ---- 3b. deployment registry (dusd + external tokens such as rlusd) -------------------------
+
+const ERC20_ABI_NAMES = new Set([
+  "name", "symbol", "decimals", "totalSupply", "balanceOf", "allowance", "approve", "transfer", "transferFrom",
+  "Transfer", "Approval",
+  "ERC20InsufficientBalance", "ERC20InvalidSender", "ERC20InvalidReceiver", "ERC20InsufficientAllowance",
+  "ERC20InvalidApprover", "ERC20InvalidSpender",
+])
+const paymentTokenAbiItems = token.json.abi.filter((x) => ERC20_ABI_NAMES.has(x.name))
+for (const n of ERC20_ABI_NAMES) {
+  if (!paymentTokenAbiItems.some((x) => x.name === n)) fail(`MockUSDC ABI lacks standard ERC-20 member ${n}`)
+}
+
+const registry = {}
+registry.dusd = {
+  key: "dusd",
+  status: "deployed",
+  chainId: manifest.chainId,
+  network: manifest.network,
+  explorer: manifest.explorer,
+  sourceCommit: manifest.sourceCommit,
+  invoiceAdvance: {
+    address: checksum(iaAddr),
+    deployTxHash: iaTx.transactionHash,
+    deployBlock: iaTx.blockNumber,
+  },
+  token: {
+    address: checksum(tokenAddr),
+    name: symbolMatch[1],
+    symbol: symbolMatch[2],
+    decimals: manifest.paymentToken.decimals,
+    isDemoToken: true,
+    kind: "mock",
+    deployTxHash: tokenTx.transactionHash,
+    deployBlock: tokenTx.blockNumber,
+  },
+  roles: manifest.roles,
+}
+
+const externalTokens = existsSync(externalTokensPath) ? JSON.parse(readFileSync(externalTokensPath, "utf8")) : {}
+for (const [key, ext] of Object.entries(externalTokens)) {
+  if (key === "dusd" || !/^[a-z][a-z0-9]*$/.test(key)) fail(`invalid external token key ${key}`)
+  if (ext.chainId !== EXPECTED_CHAIN_ID) fail(`external token ${key}: chainId ${ext.chainId} != ${EXPECTED_CHAIN_ID}`)
+  if (!isAddress(ext.address)) fail(`external token ${key}: invalid address`)
+  if (checksum(ext.address) !== ext.address) fail(`external token ${key}: address must be EIP-55 checksummed`)
+  if (!Number.isInteger(ext.decimals) || ext.decimals < 1 || ext.decimals > 36) fail(`external token ${key}: bad decimals`)
+  if (!ext.symbol || !ext.name) fail(`external token ${key}: name/symbol required`)
+  const token_ = {
+    address: ext.address,
+    name: ext.name,
+    symbol: ext.symbol,
+    decimals: ext.decimals,
+    isDemoToken: ext.isDemoToken === true,
+    kind: "external",
+  }
+  const mPath = join(contractsDir, "deployments", ext.manifest)
+  if (!existsSync(mPath)) {
+    registry[key] = {
+      key,
+      status: "not_deployed",
+      chainId: ext.chainId,
+      network: ext.network,
+      explorer: manifest.explorer,
+      token: token_,
+    }
+    continue
+  }
+  const m = JSON.parse(readFileSync(mPath, "utf8"))
+  if (m.chainId !== ext.chainId) fail(`${ext.manifest}: chainId mismatch`)
+  if (m.paymentToken?.address?.toLowerCase() !== ext.address.toLowerCase()) fail(`${ext.manifest}: token address != external-tokens.json`)
+  if (m.paymentToken.decimals !== ext.decimals) fail(`${ext.manifest}: token decimals != external-tokens.json`)
+  if (m.paymentToken.symbol !== ext.symbol) fail(`${ext.manifest}: token symbol != external-tokens.json`)
+  if (!isAddress(m.invoiceAdvance?.address)) fail(`${ext.manifest}: invalid InvoiceAdvance address`)
+  if (m.invoiceAdvance.paymentToken.toLowerCase() !== ext.address.toLowerCase()) fail(`${ext.manifest}: InvoiceAdvance.paymentToken mismatch`)
+  for (const r of ["admin", "operator", "evaluator"]) if (!isAddress(m.roles?.[r])) fail(`${ext.manifest}: role ${r} invalid`)
+  const tx = m.transactions.find((x) => x.contractName === "InvoiceAdvance")
+  if (!tx || tx.contractAddress.toLowerCase() !== m.invoiceAdvance.address.toLowerCase()) fail(`${ext.manifest}: InvoiceAdvance tx missing/mismatched`)
+  const [cTok, cAdm, cOp, cEv] = tx.constructorArguments
+  if (cTok !== ext.address || cAdm !== m.roles.admin || cOp !== m.roles.operator || cEv !== m.roles.evaluator) {
+    fail(`${ext.manifest}: constructor arguments do not match token/roles`)
+  }
+  registry[key] = {
+    key,
+    status: "deployed",
+    chainId: m.chainId,
+    network: m.network,
+    explorer: m.explorer,
+    sourceCommit: m.sourceCommit,
+    invoiceAdvance: {
+      address: checksum(m.invoiceAdvance.address),
+      deployTxHash: tx.transactionHash,
+      deployBlock: tx.blockNumber,
+    },
+    token: token_,
+    roles: m.roles,
+  }
+}
+
+const deploymentsTs =
+  HEADER(
+    "Deployment registry: one entry per selectable payment-token deployment.",
+    "contracts/deployments/*.json + contracts/deployments/external-tokens.json"
+  ) +
+  `export const deployments = ${JSON.stringify(registry, null, 2)} as const\n`
+
+const paymentTokenAbiTs =
+  HEADER(
+    `Standard ERC-20 subset of the MockUSDC ABI (sha256 ${abiHash(paymentTokenAbiItems)}); valid for any ERC-20.`,
+    "contracts/out/MockUSDC.sol/MockUSDC.json"
+  ) + `export const paymentTokenAbi = ${JSON.stringify(paymentTokenAbiItems, null, 2)} as const\n`
 
 const files = {
   "invoiceAdvanceAbi.ts": abiFile("invoiceAdvanceAbi", ia, "InvoiceAdvance"),
   "mockUsdcAbi.ts": abiFile("mockUsdcAbi", token, "MockUSDC"),
   "deployment.ts": deploymentTs,
+  "deployments.ts": deploymentsTs,
+  "paymentTokenAbi.ts": paymentTokenAbiTs,
   "index.ts": indexTs,
 }
 
@@ -260,15 +376,29 @@ if (args.has("--verify-onchain")) {
     }
     return b.toString("hex")
   }
-  for (const [label, artifact, addr] of [
-    ["InvoiceAdvance", ia, iaAddr],
-    ["MockUSDC", token, tokenAddr],
-  ]) {
+  const compare = (label, artifact, addr) => {
     const onchain = run("cast", ["code", addr], { env })
     const local = artifact.json.deployedBytecode
     const same =
       mask(onchain, local.immutableReferences) === mask(local.object, local.immutableReferences)
     console.log(`export-abi: ${label} deployed bytecode ${same ? "MATCHES" : "DOES NOT MATCH"} artifact (immutables masked)`)
     if (!same) process.exitCode = 1
+  }
+  for (const d of Object.values(registry)) {
+    if (d.status !== "deployed") {
+      console.log(`export-abi: ${d.key} is not deployed; skipped`)
+      continue
+    }
+    compare(`${d.key} InvoiceAdvance`, ia, d.invoiceAdvance.address)
+    if (d.token.kind === "mock") {
+      compare(`${d.key} MockUSDC`, token, d.token.address)
+    } else {
+      // External tokens are not ours: check only that they answer as declared.
+      const dec = run("cast", ["call", d.token.address, "decimals()(uint8)"], { env })
+      const sym = run("cast", ["call", d.token.address, "symbol()(string)"], { env }).replace(/"/g, "")
+      const ok = Number(dec) === d.token.decimals && sym === d.token.symbol
+      console.log(`export-abi: ${d.key} token ${d.token.symbol}/${d.token.decimals} ${ok ? "MATCHES" : "DOES NOT MATCH"} on-chain metadata`)
+      if (!ok) process.exitCode = 1
+    }
   }
 }

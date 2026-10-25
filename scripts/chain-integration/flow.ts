@@ -28,6 +28,7 @@ import {
   contractAddresses,
   createChainPublicClient,
   createInvoice,
+  activeDeployment,
   deployment,
   depositReserve,
   formatDusd,
@@ -43,7 +44,8 @@ import {
   getTokenMetadata,
   hasRole,
   invoiceAdvanceAbi,
-  mockUsdcAbi,
+  paymentTokenAbi,
+  getTokenPauseStatus,
   paymentTokenInfo,
   publicRpcUrl,
   redactUrls,
@@ -139,11 +141,11 @@ export function loadConfig(): Config {
 
 // ---- small output helpers -----------------------------------------------------------------------
 
-export const dusd = (v: bigint) => `${formatDusd(v)} dUSD`
+export const dusd = (v: bigint) => `${formatDusd(v)} ${paymentTokenInfo.symbol}`
 /** Display only: projections can be negative when a wallet is short (formatDusd rejects that). */
 const projected = (v: bigint) =>
   v < BigInt(0)
-    ? `${formatUnits(v, paymentTokenInfo.decimals)} dUSD (short: not yet fundable)`
+    ? `${formatUnits(v, paymentTokenInfo.decimals)} ${paymentTokenInfo.symbol} (short: not yet fundable)`
     : dusd(v)
 const xrp = (wei: bigint) => `${formatEther(wei)} XRP`
 export const line = (text = "") => console.log(text)
@@ -211,10 +213,14 @@ export async function preflight(
     const envToken = env("TOKEN_ADDRESS")
     const envContract = env("CONTRACT_ADDRESS")
     if (envToken && !same(envToken, contractAddresses.paymentToken)) {
-      throw new Error("TOKEN_ADDRESS differs from the deployment manifest")
+      throw new Error(
+        `TOKEN_ADDRESS differs from the active "${activeDeployment().key}" deployment; update .env when switching DUELY_DEPLOYMENT`
+      )
     }
     if (envContract && !same(envContract, contractAddresses.invoiceAdvance)) {
-      throw new Error("CONTRACT_ADDRESS differs from the deployment manifest")
+      throw new Error(
+        `CONTRACT_ADDRESS differs from the active "${activeDeployment().key}" deployment; update .env when switching DUELY_DEPLOYMENT`
+      )
     }
     const onchainToken = await getPaymentTokenAddress(opts)
     if (!same(onchainToken, contractAddresses.paymentToken)) {
@@ -224,7 +230,7 @@ export async function preflight(
     }
     for (const [label, address] of [
       ["InvoiceAdvance", contractAddresses.invoiceAdvance],
-      ["MockUSDC", contractAddresses.paymentToken],
+      [paymentTokenInfo.symbol, contractAddresses.paymentToken],
     ] as const) {
       const code = await client.getCode({ address })
       if (!code || code === "0x")
@@ -244,7 +250,7 @@ export async function preflight(
         `on-chain ${JSON.stringify(meta)} != SDK ${JSON.stringify(paymentTokenInfo)}`
       )
     }
-    return `${meta.name} (${meta.symbol}), ${meta.decimals} decimals - demo token`
+    return `${meta.name} (${meta.symbol}), ${meta.decimals} decimals - ${paymentTokenInfo.isDemoToken ? "demo token" : "issuer-controlled token (can be paused, clawed back or upgraded by its issuer)"}`
   })
 
   await check(checks, "Role IDs match the SDK", async () => {
@@ -284,17 +290,33 @@ export async function preflight(
     return "operator=OPERATOR_ROLE, evaluator=EVALUATOR_ROLE, client and freelancer hold no role"
   })
 
+  const nextInvoiceId = await getNextInvoiceId(opts).catch(() => undefined)
+  result.nextInvoiceId = nextInvoiceId
+
   await check(
     checks,
     "Existing invoice decodes (SDK/ABI compatibility)",
     async () => {
+      // A freshly deployed contract (for example the RLUSD one) has no invoices yet.
+      if (nextInvoiceId !== undefined && nextInvoiceId <= BigInt(1)) {
+        return "no invoices exist yet (fresh contract); nothing to decode"
+      }
       const invoice = await getInvoice(1, opts)
       return `invoice #1 is ${invoice.statusName}, ${dusd(invoice.amount)}, advance ${dusd(invoice.advanceAmount)}`
     }
   )
 
-  const nextInvoiceId = await getNextInvoiceId(opts).catch(() => undefined)
-  result.nextInvoiceId = nextInvoiceId
+  await check(checks, "Token is not paused", async () => {
+    const pause = await getTokenPauseStatus(opts)
+    if (pause.paused) {
+      throw new Error(
+        `${paymentTokenInfo.symbol} is paused by its issuer: no transfer or approval can succeed`
+      )
+    }
+    return pause.supported
+      ? `${paymentTokenInfo.symbol} reports paused() = false`
+      : `${paymentTokenInfo.symbol} has no pause control`
+  })
 
   await check(
     checks,
@@ -319,11 +341,11 @@ export async function preflight(
 
   await check(
     checks,
-    "Simulate dUSD approve (eth_call, nothing sent)",
+    `Simulate ${paymentTokenInfo.symbol} approve (eth_call, nothing sent)`,
     async () => {
       const sim = await client.simulateContract({
         address: contractAddresses.paymentToken,
-        abi: mockUsdcAbi,
+        abi: paymentTokenAbi,
         functionName: "approve",
         args: [contractAddresses.invoiceAdvance, args.amount],
         account: a.client,
@@ -368,6 +390,8 @@ export async function preflight(
         operator: gasOperator,
       },
       gasPrice,
+      reserveTarget: args.reserveTarget,
+      tokenPaused: (await getTokenPauseStatus(opts)).paused,
     }
     result.snapshot = snapshot
     result.plan = buildPlan(snapshot)
@@ -409,7 +433,10 @@ export function printPreflight(
   line(`          operator ${cfg.addresses.operator}`)
   line(`          freelancer ${cfg.addresses.freelancer}`)
   line(
-    `Invoice : ${args.amountDusd} dUSD (demo token), a NEW invoice; invoice #1 is not touched`
+    `Token   : ${paymentTokenInfo.symbol} (${paymentTokenInfo.decimals} decimals), deployment "${activeDeployment().key}"`
+  )
+  line(
+    `Invoice : ${args.amountDusd} ${paymentTokenInfo.symbol}${paymentTokenInfo.isDemoToken ? " (demo token)" : ""}, a NEW invoice; existing invoices are not touched`
   )
   line()
   for (const c of pre.checks) {
@@ -421,7 +448,7 @@ export function printPreflight(
   if (!plan) return
   line("== Plan ==")
   line(
-    `Advance: ${dusd(plan.advance)}  |  reserve top-up needed: ${dusd(plan.reserveShortfall)}`
+    `Advance: ${dusd(plan.advance)}  |  reserve deposit: ${plan.reserveDeposit > BigInt(0) ? `${dusd(plan.reserveDeposit)} (reserve is ${dusd(pre.snapshot!.reserveBalance)}, ${dusd(plan.reserveShortfall)} short of the advance)` : "none (the funded reserve is reused)"}`
   )
   line(
     `Transactions: ${plan.totalTransactions} (client ${plan.txCountBySigner.client}, evaluator ${plan.txCountBySigner.evaluator}, operator ${plan.txCountBySigner.operator})`
@@ -541,9 +568,21 @@ export function mismatches(expected: Checkpoint, actual: LiveState): string[] {
   eq("advanceAmount", expected.advanceAmount, actual.advanceAmount)
   eq("reserveBalance", expected.reserve, actual.reserve)
   eq("totalEscrow", expected.escrow, actual.escrow)
-  eq("client dUSD", expected.clientDusd, actual.clientDusd)
-  eq("freelancer dUSD", expected.freelancerDusd, actual.freelancerDusd)
-  eq("contract dUSD", expected.contractDusd, actual.contractDusd)
+  eq(
+    `client ${paymentTokenInfo.symbol}`,
+    expected.clientDusd,
+    actual.clientDusd
+  )
+  eq(
+    `freelancer ${paymentTokenInfo.symbol}`,
+    expected.freelancerDusd,
+    actual.freelancerDusd
+  )
+  eq(
+    `contract ${paymentTokenInfo.symbol}`,
+    expected.contractDusd,
+    actual.contractDusd
+  )
   eq("client allowance", expected.clientAllowance, actual.clientAllowance)
   eq("operator allowance", expected.operatorAllowance, actual.operatorAllowance)
   if (!actual.solvent)
@@ -683,13 +722,13 @@ export async function execute(
         return {
           ...base,
           submit: () =>
-            approveEscrowAllowance(plan.reserveShortfall, ctx("operator")),
+            approveEscrowAllowance(plan.reserveDeposit, ctx("operator")),
           verify: checkpointVerify(step.id),
         }
       case "depositReserve":
         return {
           ...base,
-          submit: () => depositReserve(plan.reserveShortfall, ctx("operator")),
+          submit: () => depositReserve(plan.reserveDeposit, ctx("operator")),
           verify: checkpointVerify(step.id),
         }
       case "approveAdvance":

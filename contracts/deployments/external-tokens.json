@@ -1,0 +1,13 @@
+{
+  "rlusd": {
+    "network": "xrpl-evm-testnet",
+    "chainId": 1449000,
+    "address": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+    "name": "RLUSD",
+    "symbol": "RLUSD",
+    "decimals": 18,
+    "isDemoToken": false,
+    "manifest": "xrpl-evm-testnet-rlusd.json",
+    "notes": "Issuer-controlled UUPS token: the issuer can pause, claw back and upgrade. See contracts/deployments/README.md."
+  }
+}

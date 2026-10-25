@@ -767,7 +767,7 @@ describe("persistence: resume tracking after a reload", () => {
       ["not json", "{"],
       ["not an object", "[]"],
       ["null", "null"],
-      ["wrong version", mutate(fund, (o) => (o.version = 2))],
+      ["wrong version", mutate(fund, (o) => (o.version = 99))],
       ["short hash", mutate(fund, (o) => (o.hash = "0x1234"))],
       ["non-hex hash", mutate(fund, (o) => (o.hash = "0x" + "zz".repeat(32)))],
       ["unknown function", mutate(fund, (o) => (o.functionName = "grantRole"))],

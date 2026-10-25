@@ -18,6 +18,7 @@ import {
 } from "../client"
 import { contractAddresses, xrplEvmTestnet } from "../config"
 import { invoiceAdvanceAbi, mockUsdcAbi } from "../generated"
+import { tokenPauseAbi } from "../token-pause"
 import { ROLE_IDS } from "../reads"
 import type { ChainWalletClient, ChainWriteClient } from "../writes"
 
@@ -28,10 +29,12 @@ import type { ChainWalletClient, ChainWriteClient } from "../writes"
  */
 
 const B = (n: number | string) => BigInt(n)
+const PAUSED_SELECTOR = "0x5c975abb"
 const IA = contractAddresses.invoiceAdvance.toLowerCase()
 const DECODE_ABI = [
   ...invoiceAdvanceAbi,
   ...mockUsdcAbi.filter((x) => x.type === "error"),
+  ...tokenPauseAbi.filter((x) => x.type === "error"),
 ] as Abi
 
 export const ADDR = {
@@ -73,6 +76,14 @@ export interface MockChainOptions {
   rpcChainId?: number
   /** function names whose eth_call fails with a network error containing a secret URL. */
   failCallsFor?: string[]
+  /**
+   * Makes the payment token pausable (RLUSD-like): `paused()` answers with this value and approvals
+   * and pulls revert with EnforcedPause while true. Undefined (default) behaves like MockUSDC,
+   * which has no `paused()`.
+   */
+  tokenPaused?: boolean
+  /** With tokenPaused unset: answer `paused()` like a real node does for a token that lacks it (revert, no data). */
+  tokenPauseRevertsEmpty?: boolean
 }
 
 export interface RpcRecord {
@@ -251,6 +262,23 @@ export function createMockChain(options: MockChainOptions = {}) {
           { from?: string; to: string; data: Hex },
         ]
         const isIa = to.toLowerCase() === IA
+        if (!isIa && data.toLowerCase().startsWith(PAUSED_SELECTOR)) {
+          rpc.push({ method, functionName: "paused", from })
+          if (options.tokenPaused === undefined) {
+            if (options.tokenPauseRevertsEmpty) {
+              throw Object.assign(new Error("execution reverted"), {
+                code: 3,
+                data: "0x",
+              })
+            }
+            return "0x"
+          }
+          return encodeFunctionResult({
+            abi: tokenPauseAbi,
+            functionName: "paused",
+            result: options.tokenPaused,
+          })
+        }
         const abi = isIa ? (DECODE_ABI as Abi) : (mockUsdcAbi as Abi)
         const { functionName, args = [] } = decodeFunctionData({
           abi,
@@ -320,6 +348,9 @@ export function createMockChain(options: MockChainOptions = {}) {
     }
   }
   function pull(from: string, amount: bigint) {
+    if (options.tokenPaused) {
+      throw new Revert(tokenPauseAbi as unknown as Abi, "EnforcedPause")
+    }
     const allowance = state.allowances.get(allowanceKey(from, IA)) ?? B(0)
     if (allowance < amount) {
       throw new Revert(mockUsdcAbi as Abi, "ERC20InsufficientAllowance", [
@@ -437,6 +468,9 @@ export function createMockChain(options: MockChainOptions = {}) {
   ): Hex {
     switch (fn) {
       case "approve":
+        if (options.tokenPaused) {
+          throw new Revert(tokenPauseAbi as unknown as Abi, "EnforcedPause")
+        }
         return encode(true)
       case "balanceOf":
         return encode(

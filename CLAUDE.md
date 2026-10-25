@@ -14,7 +14,7 @@ Duely lets a client lock payment for freelance work, a freelancer submit evidenc
 
 - XRPL **EVM** testnet, Solidity/Foundry/OpenZeppelin; **not** native XRPL Escrow.
 - **One `InvoiceAdvance.sol` contract**, a simple ERC-20 demo token, and platform-funded reserve. **NO external LPs, ERC-4626 vault, lending protocol, yield distribution, or public depositors.**
-- Mock ERC-20 is explicitly labeled *demo token* unless the team confirms a suitable token on the target testnet. Never label a mock as actual RLUSD.
+- Two payment-token deployments exist on XRPL EVM testnet, each with its own immutable `InvoiceAdvance`, selected by `DUELY_DEPLOYMENT=dusd|rlusd` (default `dusd`): **dUSD** (mock, 6 decimals, labeled *demo token*) and **RLUSD** (the issuer's real testnet token, 18 decimals, live-tested end to end in A6.6.4b). Never label dUSD as RLUSD, and never label RLUSD a demo token. RLUSD is issuer-controlled (pause, clawback, upgrade); this is documented, not mitigated. Details: `docs/CHAIN_SDK_HANDOFF.md`, `docs/TRACK_B_A7_HANDOFF.md`.
 - Next.js App Router + TypeScript + shadcn/Base UI, wagmi/viem, Supabase Postgres/Storage, OpenAI structured evaluation, MetaMask.
 - No x402, LangGraph orchestration, Privy, Mastercard fiat integration, credit underwriting, or automated arbitration in MVP.
 - AI returns a recommendation; it does not possess a signing key or directly call contracts. A protected backend validates eligibility and an authorized signer submits the transaction.
@@ -128,7 +128,7 @@ function resolveDispute(uint256 invoiceId, bool releaseToFreelancer) external; /
 function getInvoice(uint256 invoiceId) external view returns (Invoice memory);
 function availableReserve() external view returns (uint256);
 ```
-Roles: `DEFAULT_ADMIN_ROLE`, `OPERATOR_ROLE` (reserve, dispute resolution), `EVALUATOR_ROLE` (backend signer, advances only). Enum: `Created, Funded, Advanced, Settled, Disputed, Cancelled`. Token: 6-decimal demo token.
+Roles: `DEFAULT_ADMIN_ROLE`, `OPERATOR_ROLE` (reserve, dispute resolution), `EVALUATOR_ROLE` (backend signer, advances only). Enum: `Created, Funded, Advanced, Settled, Disputed, Cancelled`. Token: one immutable ERC-20 per deployment: dUSD (6-decimal demo token) or RLUSD (18 decimals); the contract is decimals-agnostic.
 
 **Before coding consumers, freeze:** invoice struct/enum and getter tuple; event argument names/types/indexing; ERC-20 token address (single token, immutable for MVP); signer/role initialization; chain ID; and exact dispute conditions. Contract owner exports the *compiled* ABI to `lib/chain/generated/` and publishes deployed address/chain config. Do not hand-maintain an ABI that can diverge from compiled code.
 
@@ -175,7 +175,7 @@ Use one documented JSON error shape: `{ error: { code: string, message: string }
 - Use server-only modules for secrets. Do not commit `.env`, `.env.local`, wallets, keys, or real user data. Commit `.env.example` with **names only**.
 - Supabase Storage should be private; verify access via auth/RLS and issue short-lived signed URLs as needed.
 - Use contract reads and receipts/events for balances, invoice status and transaction finality; Supabase may cache indexed data.
-- Demo tokens are not real dollars; all UI copy and demos must make that explicit.
+- Demo tokens (dUSD) are not real dollars; all UI copy and demos must make that explicit. Read symbol, decimals and `isDemoToken` from `paymentTokenInfo`; never hard-code 6 decimals or the string "dUSD".
 - Before real funds or external LPs: separate security, economic, legal and audit work is required. None of that is claimed by this MVP.
 
 ## 10. Parallel development protocol

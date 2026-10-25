@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """Build contracts/deployments/<name>.json from a forge broadcast file (real receipts only).
 
-Usage: write_manifest.py <chainId> [--out PATH]
-Refuses to write unless every transaction has a successful receipt in the broadcast file.
+Usage: write_manifest.py <chainId> [--token-key KEY] [--out PATH] [--overwrite]
+
+  (no --token-key)   the broadcast deployed MockUSDC + InvoiceAdvance (dUSD).
+  --token-key rlusd  the broadcast deployed only InvoiceAdvance against the existing token listed
+                     under KEY in deployments/external-tokens.json (default output
+                     deployments/<network>-KEY.json).
+
+Refuses to write unless every transaction has a successful receipt in the broadcast file, and
+refuses to replace an existing manifest unless --overwrite is passed (so a later deployment can
+never silently clobber the dUSD manifest).
 """
 import json
 import re
@@ -20,10 +28,22 @@ chain_id = int(args[0])
 out = None
 if "--out" in args:
     out = Path(args[args.index("--out") + 1])
+token_key = args[args.index("--token-key") + 1] if "--token-key" in args else None
+external = None
+if token_key is not None:
+    registry = json.loads((root / "deployments" / "external-tokens.json").read_text())
+    external = registry.get(token_key)
+    if external is None:
+        sys.exit(f"unknown --token-key {token_key!r}; known: {', '.join(registry)}")
+    if external["chainId"] != chain_id:
+        sys.exit(f"{token_key} is registered for chain {external['chainId']}, not {chain_id}")
 if out is None:
     if chain_id not in NAMES:
         sys.exit("no default manifest name for this chain; pass --out")
-    out = root / "deployments" / f"{NAMES[chain_id]}.json"
+    suffix = f"-{token_key}" if token_key else ""
+    out = root / "deployments" / f"{NAMES[chain_id]}{suffix}.json"
+if out.exists() and "--overwrite" not in args:
+    sys.exit(f"{out} already exists; refusing to overwrite it (pass --overwrite to replace it deliberately)")
 
 src = root / "broadcast" / "Deploy.s.sol" / str(chain_id) / "run-latest.json"
 run = json.loads(src.read_text())
@@ -49,24 +69,40 @@ for tx in run["transactions"]:
     )
 
 by_name = {t["contractName"]: t for t in txs}
-for needed in ("MockUSDC", "InvoiceAdvance"):
+needed_names = ("InvoiceAdvance",) if external else ("MockUSDC", "InvoiceAdvance")
+for needed in needed_names:
     if needed not in by_name:
-        sys.exit(f"{needed} deployment missing from broadcast file")
+        hint = "" if external else " (an external-token deployment needs --token-key)"
+        sys.exit(f"{needed} deployment missing from broadcast file{hint}")
+if external and "MockUSDC" in by_name:
+    sys.exit("this broadcast deployed MockUSDC; it is a dUSD deployment, drop --token-key")
 
 ia = by_name["InvoiceAdvance"]
 token_addr, admin, operator, evaluator = ia["constructorArguments"]
+if external:
+    if token_addr.lower() != external["address"].lower():
+        sys.exit(f"InvoiceAdvance was deployed against {token_addr}, not the registered {token_key} token")
+    payment_token = {
+        "name": external["name"],
+        "symbol": external["symbol"],
+        "address": external["address"],
+        "decimals": external["decimals"],
+        "external": True,
+    }
+else:
+    payment_token = {
+        "name": "Duely Demo USD (dUSD) - DEMO TOKEN, not real USDC/RLUSD",
+        "address": by_name["MockUSDC"]["contractAddress"],
+        "decimals": 6,
+    }
 manifest = {
     "chainId": chain_id,
     "network": NAMES.get(chain_id, "local"),
     "explorer": explorer,
-    "deployer": by_name["MockUSDC"]["from"],
+    "deployer": ia["from"],
     "deployedAtUnixMs": run.get("timestamp"),
     "sourceCommit": run.get("commit"),
-    "paymentToken": {
-        "name": "Duely Demo USD (dUSD) - DEMO TOKEN, not real USDC/RLUSD",
-        "address": by_name["MockUSDC"]["contractAddress"],
-        "decimals": 6,
-    },
+    "paymentToken": payment_token,
     "invoiceAdvance": {"address": ia["contractAddress"], "paymentToken": token_addr},
     "roles": {"admin": admin, "operator": operator, "evaluator": evaluator},
     "transactions": [

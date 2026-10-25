@@ -1,0 +1,41 @@
+{
+  "chainId": 1449000,
+  "network": "xrpl-evm-testnet",
+  "explorer": "https://explorer.testnet.xrplevm.org",
+  "deployer": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+  "deployedAtUnixMs": 1792900511417,
+  "sourceCommit": "de47475",
+  "paymentToken": {
+    "name": "RLUSD",
+    "symbol": "RLUSD",
+    "address": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+    "decimals": 18,
+    "external": true
+  },
+  "invoiceAdvance": {
+    "address": "0x1b972ec6b1b5e0b592010e7484bef0accc382792",
+    "paymentToken": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3"
+  },
+  "roles": {
+    "admin": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "operator": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "evaluator": "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+  },
+  "transactions": [
+    {
+      "contractName": "InvoiceAdvance",
+      "contractAddress": "0x1b972ec6b1b5e0b592010e7484bef0accc382792",
+      "transactionHash": "0xf1479fb0c894d5c7d518febc158b7d1750d2978505b4b80b2779b8fea3a24aea",
+      "blockNumber": 9228351,
+      "gasUsed": 2497684,
+      "constructorArguments": [
+        "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+        "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+      ],
+      "from": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0xf1479fb0c894d5c7d518febc158b7d1750d2978505b4b80b2779b8fea3a24aea"
+    }
+  ]
+}

@@ -22,6 +22,11 @@ import {
   explorerTxUrl,
   tryExplorerTxUrl,
 } from "./config"
+import {
+  activeDeploymentIdentity,
+  deploymentIdentityMismatch,
+  type DeploymentIdentity,
+} from "./deployments"
 import { ChainWriteError } from "./errors"
 import {
   ARG_KINDS,
@@ -29,7 +34,7 @@ import {
   isWriteFunctionName,
   type ExpectedReceipt,
 } from "./expected"
-import { invoiceAdvanceAbi, mockUsdcAbi } from "./generated"
+import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
 import {
   mapWriteError,
   releaseByHash,
@@ -271,7 +276,7 @@ function verifyReceipt(
   }
   const logs = receipt.logs.filter((log) => sameAddress(log.address, address))
   const abi =
-    expected.contract === "invoiceAdvance" ? invoiceAdvanceAbi : mockUsdcAbi
+    expected.contract === "invoiceAdvance" ? invoiceAdvanceAbi : paymentTokenAbi
   const decoded = parseEventLogs({
     abi: abi as Abi,
     logs,
@@ -313,11 +318,22 @@ function base(
   }
 }
 
+function assertSameDeployment(identity: DeploymentIdentity): void {
+  const why = deploymentIdentityMismatch(identity)
+  if (why) {
+    throw new ChainWriteError(
+      "DEPLOYMENT_MISMATCH",
+      `transaction cannot be tracked under this deployment: ${why}`
+    )
+  }
+}
+
 function normalizeTarget(target: string | SubmittedTransaction): {
   hash: Hex
   submitted?: SubmittedTransaction
 } {
   const submitted = typeof target === "string" ? undefined : target
+  if (submitted?.deployment) assertSameDeployment(submitted.deployment)
   const hash = typeof target === "string" ? target : target.hash
   if (
     typeof hash !== "string" ||
@@ -656,8 +672,13 @@ export async function getTransactionStatus(
 export function serializeSubmittedTransaction(
   submitted: SubmittedTransaction
 ): string {
+  // Records without an identity (hand-built, or from before dual-token support) are stamped with
+  // the active deployment, which is exactly what they are being persisted under.
+  const deployment = submitted.deployment ?? activeDeploymentIdentity()
+  assertSameDeployment(deployment)
   return JSON.stringify({
-    version: 1,
+    version: 2,
+    deployment,
     hash: submitted.hash,
     functionName: submitted.functionName,
     from: submitted.from,
@@ -694,8 +715,40 @@ export function parseSubmittedTransaction(json: string): SubmittedTransaction {
   } catch {
     throw malformed("not valid JSON")
   }
-  if (!isRecord(raw) || raw.version !== 1)
+  if (!isRecord(raw) || (raw.version !== 1 && raw.version !== 2)) {
     throw malformed("unsupported version")
+  }
+  let deployment: DeploymentIdentity
+  if (raw.version === 1) {
+    // Written before deployments existed, when dUSD was the only token. Safe to restore only
+    // while dUSD is still the active deployment.
+    const active = activeDeploymentIdentity()
+    if (active.key !== "dusd") {
+      throw new ChainWriteError(
+        "DEPLOYMENT_MISMATCH",
+        `stored transaction predates deployment tracking (version 1, dUSD only) and cannot be restored while the active deployment is "${active.key}"`
+      )
+    }
+    deployment = active
+  } else {
+    const stored = raw.deployment
+    if (
+      !isRecord(stored) ||
+      (stored.key !== "dusd" && stored.key !== "rlusd") ||
+      typeof stored.invoiceAdvance !== "string" ||
+      !isAddress(stored.invoiceAdvance, { strict: true }) ||
+      typeof stored.paymentToken !== "string" ||
+      !isAddress(stored.paymentToken, { strict: true })
+    ) {
+      throw malformed("deployment")
+    }
+    deployment = {
+      key: stored.key,
+      invoiceAdvance: stored.invoiceAdvance,
+      paymentToken: stored.paymentToken,
+    }
+    assertSameDeployment(deployment)
+  }
 
   const { hash, functionName, from, chainId, submittedAt, expected } = raw
   if (
@@ -778,5 +831,6 @@ export function parseSubmittedTransaction(json: string): SubmittedTransaction {
     expected: { contract: table.contract, eventName: table.eventName, args },
     submittedAt,
     explorerUrl: explorerTxUrl(hash),
+    deployment,
   }
 }

@@ -97,4 +97,57 @@ forge verify-contract <address> src/InvoiceAdvance.sol:InvoiceAdvance --chain-id
   --constructor-args $(cast abi-encode "constructor(address,address,address,address)" <token> <admin> <operator> <evaluator>)
 ```
 
-The Demo USD token is a mock, labeled as such everywhere; it is not USDC or RLUSD.
+## Deploying against RLUSD (existing token; done in A6.6.4a, live-tested in A6.6.4b)
+
+InvoiceAdvance's payment token is immutable, so RLUSD needs its own InvoiceAdvance. The deployment
+selection (`DUELY_DEPLOYMENT=dusd|rlusd`, see `docs/CHAIN_SDK_HANDOFF.md`) keeps dUSD as the
+default until the RLUSD contract is deployed **and** live-tested. The dUSD manifest
+(`xrpl-evm-testnet.json`) is never touched by an RLUSD deployment.
+
+Files:
+
+| File | Role |
+|---|---|
+| `xrpl-evm-testnet.json` | dUSD deployment manifest (MockUSDC + InvoiceAdvance). Do not edit or regenerate. |
+| `external-tokens.json` | Registered third-party tokens (RLUSD address, name, symbol, 18 decimals). |
+| `xrpl-evm-testnet-rlusd.json` | RLUSD deployment manifest. Written from the A6.6.4a broadcast (InvoiceAdvance `0x1B972ec6B1B5E0b592010e7484beF0accC382792`, tx `0xf1479fb0…a24aea`, block 9228351). While it is absent, selecting `rlusd` fails explicitly instead of falling back. |
+
+The exact, ordered command list (readiness check, dry run, deploy, manifest, verification, live
+integration runs) is in `docs/CHAIN_SDK_HANDOFF.md`, section "RLUSD live test: exact commands for
+A6.6.4". The deploy step is:
+
+```bash
+set -a; source ../.env; set +a
+export PAYMENT_TOKEN_ADDRESS=0x27b57a9D0b8d24EB97259c4E2279e45255e016f3
+export PAYMENT_TOKEN_DECIMALS=18
+export PAYMENT_TOKEN_SYMBOL=RLUSD
+forge script script/Deploy.s.sol --rpc-url xrpl_evm_testnet --account duely-deployer --broadcast
+python3 -I script/write_manifest.py 1449000 --token-key rlusd   # writes xrpl-evm-testnet-rlusd.json (run from contracts/)
+node script/export-abi.mjs --verify-onchain                      # InvoiceAdvance bytecode + token metadata
+```
+
+The script validates the token **before** broadcasting: it must have contract code, answer
+`decimals()` and `symbol()` exactly as declared, implement `balanceOf`, and not be one of the role
+addresses. It mints nothing and needs no token owner rights. `write_manifest.py` refuses to
+overwrite an existing manifest (pass `--overwrite` only deliberately) and only reads real receipts.
+`export-abi.mjs` does not require the RLUSD token to match MockUSDC bytecode; it still checks
+InvoiceAdvance bytecode (immutables masked) and, for external tokens, the on-chain decimals/symbol.
+
+### RLUSD issuer risks (accepted knowingly, or not at all)
+
+RLUSD on XRPL EVM testnet is an upgradeable (UUPS) token controlled by its issuer. One EOA
+(`0xF225366c4061F6D17443506c791caA89593B7c13`) held the admin, upgrader, pauser and clawback roles
+when last checked; roles can change without notice and the explorer shows no verified source.
+
+- **Pause:** transfers and approvals revert (`EnforcedPause`). Funding, advances and settlement stall
+  until the issuer unpauses. Funds are not lost; the SDK reports `TOKEN_PAUSED`.
+- **Clawback:** the issuer can burn tokens held by InvoiceAdvance. Escrow and reserve accounting would
+  then exceed the real balance and later payouts could revert. InvoiceAdvance cannot prevent this.
+- **Upgrade:** the issuer can change token behaviour entirely (fees, hooks, blocklists). InvoiceAdvance
+  already rejects fee-on-transfer behaviour at funding time, but only for that one check.
+- **No minting:** test balances come from the issuer's faucet-like contract; we cannot top up.
+
+None of this is claimed to be mitigated by this MVP. Treat RLUSD runs as testnet-only.
+
+The Demo USD token is a mock, labeled as such everywhere; it is not USDC or RLUSD. RLUSD is the
+issuer's token and is never a demo token.

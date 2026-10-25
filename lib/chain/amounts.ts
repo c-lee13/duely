@@ -1,6 +1,7 @@
 import { formatUnits, parseUnits } from "viem"
 
 import { paymentTokenInfo } from "./config"
+import { deployments as generatedDeployments } from "./generated/deployments"
 
 /**
  * Token amount helpers. Amounts are always `bigint` base units; decimal strings only cross JSON
@@ -8,14 +9,22 @@ import { paymentTokenInfo } from "./config"
  * Note: tsconfig targets ES2017, so bigint literals (`1n`) are not allowed; use BigInt().
  */
 
-export const DUSD_DECIMALS: number = paymentTokenInfo.decimals
+/**
+ * Decimals of the dUSD demo token (6). Kept for existing callers; it does NOT follow
+ * DUELY_DEPLOYMENT. Use `tokenDecimals()` or the `*Token*` helpers for the active token.
+ */
+export const DUSD_DECIMALS: number = generatedDeployments.dusd.token.decimals
+
+/** Decimals of the active payment token (6 for dUSD, 18 for RLUSD), resolved on every call. */
+export function tokenDecimals(): number {
+  return paymentTokenInfo.decimals
+}
 export const MAX_UINT256: bigint = (BigInt(1) << BigInt(256)) - BigInt(1)
 
 /** Advance = floor(amount * ADVANCE_BPS / BPS_DENOMINATOR), as in InvoiceAdvance.sol. */
 export const ADVANCE_BPS: bigint = BigInt(9000)
 export const BPS_DENOMINATOR: bigint = BigInt(10000)
 
-const DECIMAL_STRING = new RegExp(`^\\d+(\\.\\d{1,${DUSD_DECIMALS}})?$`)
 const BASE_UNITS_STRING = /^\d+$/
 
 function assertUint256(value: bigint, what: string): void {
@@ -25,23 +34,59 @@ function assertUint256(value: bigint, what: string): void {
   }
 }
 
-/** Parses a human dUSD amount ("1000", "12.5") to base units. Rejects extra decimals, never rounds. */
-export function parseDusd(value: string): bigint {
-  if (typeof value !== "string" || !DECIMAL_STRING.test(value)) {
+/**
+ * Parses a human amount ("1000", "12.5") to base units for a token with `decimals` decimals.
+ * Rejects extra decimals, signs and exponents; never rounds.
+ */
+export function parseTokenUnits(
+  value: string,
+  decimals: number,
+  label = "token"
+): bigint {
+  assertDecimals(decimals)
+  const pattern = new RegExp(`^\\d+(\\.\\d{1,${decimals}})?$`)
+  if (typeof value !== "string" || !pattern.test(value)) {
     throw new RangeError(
-      `invalid dUSD amount: expected a non-negative decimal with at most ${DUSD_DECIMALS} decimals`
+      `invalid ${label} amount: expected a non-negative decimal with at most ${decimals} decimals`
     )
   }
-  const parsed = parseUnits(value, DUSD_DECIMALS)
+  const parsed = parseUnits(value, decimals)
   assertUint256(parsed, "amount")
   return parsed
 }
 
-/** Formats base units as a human dUSD string without trailing zeros ("1000", "12.5"). */
-export function formatDusd(value: bigint): string {
+/** Formats base units as a human string without trailing zeros ("1000", "12.5"). */
+export function formatTokenUnits(value: bigint, decimals: number): string {
+  assertDecimals(decimals)
   assertUint256(value, "amount")
-  return formatUnits(value, DUSD_DECIMALS)
+  return formatUnits(value, decimals)
 }
+
+function assertDecimals(decimals: number): void {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+    throw new RangeError("decimals must be an integer between 0 and 36")
+  }
+}
+
+/** Parses a human amount using the ACTIVE deployment's token decimals and symbol. */
+export function parseToken(value: string): bigint {
+  return parseTokenUnits(
+    value,
+    paymentTokenInfo.decimals,
+    paymentTokenInfo.symbol
+  )
+}
+
+/** Formats base units using the ACTIVE deployment's token decimals. */
+export function formatToken(value: bigint): string {
+  return formatTokenUnits(value, paymentTokenInfo.decimals)
+}
+
+/** @deprecated Alias of `parseToken` (active token). Kept for existing dUSD callers. */
+export const parseDusd = parseToken
+
+/** @deprecated Alias of `formatToken` (active token). Kept for existing dUSD callers. */
+export const formatDusd = formatToken
 
 /** Base-unit bigint -> decimal string for JSON (CLAUDE.md `TokenAmount`). */
 export function toTokenAmount(value: bigint): string {

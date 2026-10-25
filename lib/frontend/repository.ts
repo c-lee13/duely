@@ -11,6 +11,7 @@ import type {
   Session,
   Submission,
   SubmitEvidenceInput,
+  SubmitGithubInput,
   TimelineEvent,
   TokenAmount,
   TransactionRecord,
@@ -42,6 +43,8 @@ export interface DuelyRepository {
   fundInvoice(invoiceId: InvoiceId, onProgress?: ProgressListener): Promise<void>
 
   submitEvidence(input: SubmitEvidenceInput): Promise<Submission>
+  /** Records a GitHub repository + commit as the submission (POST /api/submissions { type: "github" }). Nothing is paid. */
+  submitGithubRepository(input: SubmitGithubInput): Promise<Submission>
   getEvaluation(submissionId: string): Promise<EvaluationRecord | null>
   requestEvaluation(submissionId: string): Promise<EvaluationRecord>
 

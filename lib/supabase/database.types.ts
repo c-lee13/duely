@@ -125,6 +125,9 @@ export type SubmissionRow = {
   note: string
   /** true only when a trusted chain adapter confirmed funding at submission time. */
   funding_verified_onchain: boolean
+  /** GitHub code submissions (migration 9): canonical repository URL and full commit SHA, both or neither. NULL for file submissions. */
+  repository_url: string | null
+  commit_sha: string | null
   created_at: string
 }
 

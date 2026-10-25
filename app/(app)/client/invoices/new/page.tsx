@@ -2,13 +2,14 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Lock, Plus, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Lock, Plus, Sparkles, Trash2 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { AgreementDraftPanel, type AcceptedDraft } from "@/components/duely/agreement-draft-panel"
 import { RoleGate } from "@/components/duely/role-gate"
 import { useToast } from "@/components/duely/toast"
 import { AddressChip, Amount, ButtonLink, PageHeader, Pill, SimulatedTag } from "@/components/duely/primitives"
@@ -43,6 +44,11 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
     { key: 2, text: "", mandatory: true },
   ])
   const [errors, setErrors] = React.useState<Errors>({})
+  // AI agreement draft: the panel is only a suggestion box. Nothing in it reaches the invoice until the client accepts.
+  const [draftOpen, setDraftOpen] = React.useState(false)
+  const [draftSource, setDraftSource] = React.useState("")
+  const [acceptedDraft, setAcceptedDraft] = React.useState<AcceptedDraft | null>(null)
+  const descriptionReady = description.trim().length >= 10
 
   const create = useAction(async (repo, ...[input]: [Parameters<typeof repo.createInvoice>[0]]) => {
     progress.reset()
@@ -60,7 +66,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
     const e: Errors = {}
     if (!title.trim()) e.title = "Give the invoice a short title."
     if (!/^0x[0-9a-fA-F]{40}$/.test(freelancer.trim())) e.freelancer = "Enter a valid 0x wallet address (42 characters)."
-    else if (freelancer.trim().toLowerCase() === clientWallet.toLowerCase()) e.freelancer = "The freelancer wallet must differ from yours."
+    else if (freelancer.trim().toLowerCase() === clientWallet.toLowerCase()) e.freelancer = "Use a different wallet for the freelancer. The escrow contract doesn't allow one wallet to be both parties on the same invoice. With this wallet you can still switch between the Client and Freelancer dashboards for different invoices."
     if (!amount || BigInt(amount) <= BigInt(0)) e.amount = "Enter an amount greater than zero, such as 1000 or 250.5."
     if (!description.trim()) e.description = "Describe the work so both sides agree on scope."
     const filled = criteria.filter((c) => c.text.trim())
@@ -68,6 +74,24 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
     else if (!filled.some((c) => c.mandatory)) e.criteria = "Mark at least one criterion as mandatory."
     setErrors(e)
     return Object.keys(e).length === 0
+  }
+
+  function openDraft() {
+    setDraftSource(description) // snapshot: the model is asked about exactly this text, and the field is never rewritten
+    setDraftOpen(true)
+  }
+
+  function acceptDraft(a: AcceptedDraft) {
+    setAcceptedDraft(a)
+    setDraftOpen(false)
+    if (a.criteria.length > 0) {
+      // Fill blank rows first, then append. Existing text the client typed is kept.
+      setCriteria((cs) => {
+        const kept = cs.filter((c) => c.text.trim())
+        return [...kept, ...a.criteria.map((c) => ({ key: keyRef.current++, text: c.text, mandatory: c.mandatory }))]
+      })
+    }
+    toast({ tone: "success", title: "Draft items added to the form", description: "Nothing is created or locked yet. Review the criteria, then continue." })
   }
 
   function move(i: number, d: -1 | 1) {
@@ -148,6 +172,27 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
                 ))}
               </ol>
             </div>
+            {acceptedDraft && (acceptedDraft.scope.length > 0 || acceptedDraft.deliverables.length > 0 || acceptedDraft.outOfScope.length > 0) && (
+              <div className="rounded-lg border p-3">
+                <p className="mb-2 flex flex-wrap items-center gap-2 font-medium">
+                  Scope and deliverables from the AI draft <Pill tone="warning">Unsigned draft</Pill>
+                </p>
+                <p className="mb-2 text-xs text-muted-foreground">Reviewed and edited by you. Not signed, not legally approved, and not part of the locked criteria or what is committed on-chain.</p>
+                <ul className="list-disc space-y-0.5 pl-5">
+                  {acceptedDraft.scope.map((x) => (
+                    <li key={`s-${x}`}>{x}</li>
+                  ))}
+                  {acceptedDraft.deliverables.map((d) => (
+                    <li key={`d-${d.title}-${d.description}`}>
+                      <span className="font-medium">{d.title}:</span> {d.description}
+                    </li>
+                  ))}
+                  {acceptedDraft.outOfScope.map((x) => (
+                    <li key={`o-${x}`}>Out of scope: {x}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {live ? (
               <Alert>
                 <Lock />
@@ -229,9 +274,20 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
                 If the freelancer requests an advance, <Amount value={advanceFor(amount)} /> (90%, rounded down) is paid from the platform reserve.
               </p>
             )}
-            <Field label="Description" error={errors.description} htmlFor="description">
+            <Field
+              label="Description"
+              error={errors.description}
+              htmlFor="description"
+              hint={!live ? "AI drafting runs on the server, so it is only available when connected to the live backend." : !descriptionReady ? "Write a sentence or two about the project to enable AI drafting." : "The AI drafts from this text. It never changes what you wrote."}
+              action={
+                <Button type="button" size="sm" variant="outline" onClick={openDraft} disabled={!live || !descriptionReady || draftOpen}>
+                  <Sparkles /> Generate Agreement with AI
+                </Button>
+              }
+            >
               <Textarea id="description" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What will be delivered?" aria-invalid={!!errors.description} aria-describedby={errors.description ? "description-err" : undefined} />
             </Field>
+            {draftOpen && <AgreementDraftPanel description={draftSource} onAccept={acceptDraft} onDiscard={() => setDraftOpen(false)} />}
           </CardContent>
         </Card>
 
@@ -307,17 +363,22 @@ function Field({
   htmlFor,
   error,
   hint,
+  action,
   children,
 }: {
   label: string
   htmlFor: string
   error?: string
   hint?: string
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {action}
+      </div>
       {children}
       {hint && !error && <p className="text-xs text-muted-foreground">{hint}</p>}
       {error && (

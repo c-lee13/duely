@@ -10,8 +10,8 @@
 import type {
   Address,
   Bytes32,
-  CriterionResult,
-  EvaluationResult,
+  CriterionResult as SharedCriterionResult,
+  EvaluationResult as SharedEvaluationResult,
   InvoiceId,
   InvoiceRecord,
   OnchainInvoiceStatus,
@@ -23,14 +23,37 @@ import type {
 export type {
   Address,
   Bytes32,
-  CriterionResult,
-  EvaluationResult,
   InvoiceId,
   InvoiceRecord,
   OnchainInvoiceStatus,
   SubmissionStatus,
   TokenAmount,
   TxAction,
+}
+
+export type CriterionAssessmentValue = "verified" | "partial" | "unsupported"
+
+/** A cited place in the submitted source (GitHub evaluations). Untrusted text: render it, never interpret it. */
+export interface SourceReference {
+  path: string
+  startLine: number
+  endLine: number
+  quote: string
+}
+
+/** The shared criterion result plus the optional detail classifying evaluators (Gemini) attach. */
+export interface CriterionResult extends SharedCriterionResult {
+  /** Classifying evaluators (Gemini) only; absent for simulated and older evaluations. */
+  assessment?: CriterionAssessmentValue
+  weight?: number
+  /** weight x (1, 0.5 or 0); may end in .5 */
+  points?: number
+  /** GitHub evaluations: source references the server checked against the retrieved code. */
+  evidence?: SourceReference[]
+}
+
+export interface EvaluationResult extends Omit<SharedEvaluationResult, "criteriaResults"> {
+  criteriaResults: CriterionResult[]
 }
 
 // ---- UI-only extensions ----------------------------------------------------
@@ -85,11 +108,16 @@ export interface Submission {
   /** Mock storage path; real uploads will go to private Supabase Storage. */
   storagePath: string
   createdAt: string
+  /** GitHub code submissions: the canonical repository URL and full commit SHA the server stored. Absent/null for file uploads. */
+  repositoryUrl?: string | null
+  commitSha?: string | null
 }
 
 export type EvaluationState = "running" | "completed" | "error"
 
 export interface EvaluationRecord extends EvaluationResult {
+  /** Set for GitHub code evaluations: the exact repository and commit that was reviewed. */
+  source?: { kind: "github"; repository: string; commitSha: string }
   evaluationId: string
   state: EvaluationState
   criteriaHash: Bytes32
@@ -204,6 +232,17 @@ export interface SubmitEvidenceInput {
   note: string
   /** The chosen file. Ignored by the mock adapter; the API adapter uploads it to private storage. */
   file?: File
+  /** Mock-only: which deterministic outcome the simulated evaluator returns. */
+  simulatedOutcome?: "pass" | "fail"
+}
+
+/** A GitHub repository submission. The server validates and canonicalises both fields; the identity comes from the session. */
+export interface SubmitGithubInput {
+  invoiceId: InvoiceId
+  repositoryUrl: string
+  /** The full 40-character commit SHA. */
+  commitSha: string
+  note: string
   /** Mock-only: which deterministic outcome the simulated evaluator returns. */
   simulatedOutcome?: "pass" | "fail"
 }

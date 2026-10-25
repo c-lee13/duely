@@ -20,8 +20,9 @@ See [`SCHEMA.md`](./SCHEMA.md) for tables, relationships, guarantees and migrati
 | `migrations/20261024000006_evidence_storage_policies.sql` | Evidence upload/read policies |
 | `migrations/20261024000008_backend_api_support.sql` | Phase 4: atomic `register_invoice()` (service role only), one live evaluation per submission. See [`API.md`](./API.md). |
 | `migrations/20261024000007_evidence_upload_hardening.sql` | Removes direct browser uploads (server-minted signed URLs only), funding-verification flag, MIME check. See [`EVIDENCE.md`](./EVIDENCE.md). |
+| `migrations/20261024000009_github_submissions.sql` | Additive: nullable `submissions.repository_url` + `commit_sha` (canonical URL, full lower-case 40-hex SHA, both or neither, immutable). No RLS or grant changes. |
 
-Migrations 1–3 were applied to the dev project. **4–8 are not applied yet.** See [`AUTH_RLS.md`](./AUTH_RLS.md) for the auth
+Migrations 1–3 were applied to the dev project. **4–9 are not applied yet.** See [`AUTH_RLS.md`](./AUTH_RLS.md) for the auth
 design, authorization rules, configuration and tests (`npm test`). Browsers get read-only access; every write is server-only.
 Do not add client write policies.
 Amounts are exact `numeric` integers: always read them as text (`amount::text`) to avoid JSON precision loss.

@@ -30,8 +30,24 @@ type Admin = SupabaseClient<Database>
 
 const INVOICE_COLS =
   "id, chain_id, contract_address, token_address, invoice_id::text, client_address, freelancer_address, amount::text, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date, onchain_status, advance_amount::text, chain_synced_at, created_at"
-const SUBMISSION_COLS =
-  "id, invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size, mime_type, note, funding_verified_onchain, created_at"
+// "*", not a column list: repository_url / commit_sha only exist once migration 9 is applied, and naming them would break every
+// submission read on a database without them. toSubmission() picks the fields and reads a missing column as null.
+const SUBMISSION_COLS = "*"
+const toSubmission = (r: Record<string, unknown>): SubmissionData => ({
+  id: r.id as string,
+  invoice_uuid: r.invoice_uuid as string,
+  freelancer_user_id: r.freelancer_user_id as string,
+  freelancer_address: r.freelancer_address as SubmissionData["freelancer_address"],
+  storage_path: r.storage_path as string,
+  file_name: r.file_name as string,
+  file_size: Number(r.file_size),
+  mime_type: r.mime_type as string,
+  note: r.note as string,
+  funding_verified_onchain: r.funding_verified_onchain as boolean,
+  repository_url: (r.repository_url as string | null | undefined) ?? null,
+  commit_sha: (r.commit_sha as string | null | undefined) ?? null,
+  created_at: r.created_at as string,
+})
 const EVALUATION_COLS =
   "id, submission_id, invoice_uuid, criteria_hash, criteria_version, model, prompt_version, state, score, passed, criteria_results, summary, pass_rule, simulated, error_message, created_at, evaluated_at"
 const ADVANCE_COLS =
@@ -109,7 +125,7 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
       if (ids.length === 0) return []
       const { data, error } = await admin.from("submissions").select(SUBMISSION_COLS).in("invoice_uuid", ids).order("created_at", { ascending: false }).order("id", { ascending: false })
       if (error) fail(error)
-      return rows<SubmissionData>(data)
+      return rows<Record<string, unknown>>(data).map(toSubmission)
     },
     async listEvaluationsForInvoices(ids) {
       if (ids.length === 0) return []
@@ -134,12 +150,12 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
       if (error) fail(error)
-      return rows<SubmissionData>(data)
+      return rows<Record<string, unknown>>(data).map(toSubmission)
     },
     async getSubmission(id) {
       const { data, error } = await admin.from("submissions").select(SUBMISSION_COLS).eq("id", id).maybeSingle()
       if (error) fail(error)
-      return (data as SubmissionData | null) ?? null
+      return data ? toSubmission(data as Record<string, unknown>) : null
     },
     async listEvaluations(invoiceId) {
       const { data, error } = await admin

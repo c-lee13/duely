@@ -7,10 +7,12 @@ import type {
   AcceptanceCriterion,
   Address,
   AdvanceRequest,
+  CriterionResult,
   EvaluationRecord,
   InvoiceBundle,
   InvoiceDetail,
   OnchainInvoiceStatus,
+  SourceReference,
   SubmissionStatus,
   Submission,
   TimelineEvent,
@@ -40,7 +42,18 @@ export interface ApiEvaluation {
   state: "running" | "completed" | "error"
   score: number | null
   passed: boolean | null
-  criteriaResults: Array<{ criterion: string; passed: boolean; reason: string; mandatory?: boolean }> | null
+  criteriaResults: Array<{
+    criterion: string
+    passed: boolean
+    reason: string
+    mandatory?: boolean
+    // Stored by classifying evaluators. Untrusted shapes: toEvaluationRecord re-checks every one.
+    assessment?: unknown
+    weight?: unknown
+    points?: unknown
+    evidence?: unknown
+    source?: unknown
+  }> | null
   summary: string | null
   criteriaHash: `0x${string}`
   criteriaVersion: number
@@ -57,7 +70,7 @@ export interface ApiInvoiceDetail {
   criteria: Array<{ position: number; id: string; text: string; mandatory: boolean }>
   criteriaVersion: number
   dueDate: string | null
-  submissions: Array<{ submissionId: string; note: string; fileName: string; fileSize: number; mimeType: string; createdAt: string }>
+  submissions: Array<{ submissionId: string; note: string; fileName: string; fileSize: number; mimeType: string; createdAt: string; repositoryUrl?: string | null; commitSha?: string | null }>
   evaluations: ApiEvaluation[]
   advanceRequests: Array<{ requestId: string; status: AdvanceRequest["status"]; amount: string; reason: string | null; txHash: string | null; txFrom?: string | null; createdAt: string }>
 }
@@ -117,6 +130,39 @@ export function toInvoiceDetail(
   }
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v)
+const finiteNumber = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1000 ? v : undefined)
+
+/** Per-criterion detail from classifying evaluators. Anything that is not exactly the expected shape is dropped. */
+function detailOf(r: NonNullable<ApiEvaluation["criteriaResults"]>[number]): Partial<CriterionResult> {
+  const out: Partial<CriterionResult> = {}
+  if (r.assessment === "verified" || r.assessment === "partial" || r.assessment === "unsupported") out.assessment = r.assessment
+  const weight = finiteNumber(r.weight)
+  const points = finiteNumber(r.points)
+  if (weight !== undefined) out.weight = weight
+  if (points !== undefined) out.points = points
+  if (Array.isArray(r.evidence)) {
+    const refs: SourceReference[] = []
+    for (const x of r.evidence.slice(0, 20)) {
+      if (!isRecord(x) || typeof x.path !== "string" || typeof x.quote !== "string") continue
+      const { startLine, endLine } = x
+      if (typeof startLine !== "number" || typeof endLine !== "number" || !Number.isInteger(startLine) || !Number.isInteger(endLine)) continue
+      refs.push({ path: x.path.slice(0, 400), startLine, endLine, quote: x.quote.slice(0, 400) })
+    }
+    out.evidence = refs
+  }
+  return out
+}
+
+/** The reviewed repository and commit, when every criterion result agrees on one valid GitHub source. */
+function sourceOf(results: NonNullable<ApiEvaluation["criteriaResults"]>): { source?: EvaluationRecord["source"] } {
+  const first = results[0]?.source
+  if (!isRecord(first) || first.kind !== "github" || typeof first.repository !== "string" || typeof first.commitSha !== "string") return {}
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(first.repository) || !/^[0-9a-f]{40}$/.test(first.commitSha)) return {}
+  const same = results.every((r) => isRecord(r.source) && r.source.kind === "github" && r.source.repository === first.repository && r.source.commitSha === first.commitSha)
+  return same ? { source: { kind: "github", repository: first.repository, commitSha: first.commitSha } } : {}
+}
+
 export function toEvaluationRecord(e: ApiEvaluation, invoiceId: string): EvaluationRecord {
   const results = e.criteriaResults ?? []
   return {
@@ -124,7 +170,13 @@ export function toEvaluationRecord(e: ApiEvaluation, invoiceId: string): Evaluat
     submissionId: e.submissionId,
     score: e.score ?? 0,
     passed: e.passed === true,
-    criteriaResults: results.map(({ criterion, passed, reason }) => ({ criterion, passed, reason })),
+    criteriaResults: results.map((r) => ({
+      criterion: r.criterion,
+      passed: r.passed,
+      reason: r.reason,
+      ...detailOf(r),
+    })),
+    ...sourceOf(results),
     summary: e.summary ?? "",
     evaluationId: e.evaluationId,
     state: e.state,
@@ -214,6 +266,8 @@ export function toBundle(detail: ApiInvoiceDetail, mine: readonly string[]): Inv
     note: s.note,
     storagePath: "", // private; files are opened through the authorized download endpoint
     createdAt: s.createdAt,
+    repositoryUrl: s.repositoryUrl ?? null,
+    commitSha: s.commitSha ?? null,
   }))
   return {
     invoice,

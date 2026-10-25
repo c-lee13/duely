@@ -1,3 +1,5 @@
+import { GITHUB_DECLARATION_FILE_NAME, serializeGithubDeclaration } from "@/lib/ai/github-declaration"
+import type { GithubSubmissionResult } from "@/lib/ai/github-submission"
 import type { Address, OnchainInvoiceStatus } from "@/lib/frontend/domain"
 import { invoiceInScope, type DeploymentScope } from "@/lib/shared/deployment-scope"
 import {
@@ -45,6 +47,9 @@ export type EvidenceErrorCode =
   | "CHAIN_UNAVAILABLE"
   | "SUBMISSION_LIMIT"
   | "TOO_MANY_UPLOADS"
+  | "GITHUB_REJECTED"
+  | "GITHUB_UNAVAILABLE"
+  | "GITHUB_SUBMISSIONS_UNAVAILABLE"
   | "WRONG_DEPLOYMENT"
 
 const STATUS: Record<EvidenceErrorCode, number> = {
@@ -65,6 +70,9 @@ const STATUS: Record<EvidenceErrorCode, number> = {
   CHAIN_UNAVAILABLE: 503,
   SUBMISSION_LIMIT: 409,
   TOO_MANY_UPLOADS: 429,
+  GITHUB_REJECTED: 422,
+  GITHUB_UNAVAILABLE: 503,
+  GITHUB_SUBMISSIONS_UNAVAILABLE: 503,
   WRONG_DEPLOYMENT: 409,
 }
 
@@ -104,6 +112,9 @@ export interface SubmissionRecord {
   file_size: number
   mime_type: string
   funding_verified_onchain: boolean
+  /** GitHub code submissions: canonical repository URL + full commit SHA (both or neither). null for file submissions. */
+  repository_url: string | null
+  commit_sha: string | null
   created_at: string
 }
 
@@ -117,6 +128,9 @@ export interface NewSubmission {
   mime_type: string
   note: string
   funding_verified_onchain: boolean
+  /** Present only for GitHub submissions. Absent (not null) for files so the insert never names columns it does not need. */
+  repository_url?: string
+  commit_sha?: string
 }
 
 export class DuplicatePathError extends Error {}
@@ -129,6 +143,8 @@ export interface EvidenceDb {
   countSubmissions(invoiceId: string): Promise<number>
   findSubmissionByPath(path: string): Promise<SubmissionRecord | null>
   getSubmission(submissionId: string): Promise<SubmissionRecord | null>
+  /** The invoice's newest submission, if any. */
+  latestSubmission(invoiceId: string): Promise<SubmissionRecord | null>
   /** Throws DuplicatePathError when the path is already registered; throws EvidenceError CRITERIA_INCOMPLETE from the DB trigger. */
   insertSubmission(row: NewSubmission): Promise<SubmissionRecord>
 }
@@ -141,6 +157,8 @@ export interface StoredObjectInfo {
 export interface EvidenceObjectStore {
   /** Signed URL + token that allow ONE create-only upload to exactly this path. */
   createSignedUpload(path: string): Promise<{ url: string; token: string }>
+  /** Server-side, create-only write of a small object the SERVER generated (never user content). Fails if the path exists. */
+  put(path: string, bytes: Uint8Array, mimeType: string): Promise<void>
   head(path: string): Promise<StoredObjectInfo | null>
   readPrefix(path: string, bytes: number): Promise<Uint8Array | null>
   createSignedDownload(path: string, ttlSeconds: number, downloadName: string): Promise<{ url: string; expiresAt: Date }>
@@ -159,11 +177,16 @@ export interface ChainFundingVerifier {
 
 export const noChainAdapter: ChainFundingVerifier = { verify: async () => ({ status: "unavailable" }) }
 
+/** Confirms a public GitHub repository and commit exist (metadata only: never file contents) and returns their canonical form. */
+export type GithubValidator = (repositoryUrl: string, commitSha: string) => Promise<GithubSubmissionResult>
+
 export interface EvidenceDeps {
   /** The one deployment this process serves; invoices of another deployment are refused. Required. */
   scope: DeploymentScope
   db: EvidenceDb
   objects: EvidenceObjectStore
+  /** Absent = GitHub submissions are not enabled in this deployment. */
+  github?: GithubValidator
   chain: ChainFundingVerifier
   /** When true, evidence is refused unless the chain adapter confirmed funding. */
   requireChainVerification: boolean
@@ -376,6 +399,85 @@ export async function registerSubmission(
   }
 }
 
+// ---- GitHub code submissions: validate, canonicalise, record -----------------------------------------------------
+
+/** Errors the submitter can fix; everything else from GitHub is a retryable outage. */
+const GITHUB_FIXABLE = new Set(["INVALID_URL", "INVALID_SHA", "REPO_NOT_FOUND", "REPO_NOT_PUBLIC", "COMMIT_NOT_FOUND"])
+
+/**
+ * Records a GitHub code submission: a repository URL and a full commit SHA. Same authorization and invoice rules as a file
+ * submission, applied BEFORE any call to GitHub. Both values are validated and normalised by the GitHub validator (metadata
+ * only: no source code is fetched, cloned or run), and only the canonical forms are stored, in the dedicated columns.
+ *
+ * The submissions table still requires an evidence file, so the server writes the canonical declaration object itself under a
+ * path it generated; the submitter never uploads one. The stored columns are authoritative for evaluation.
+ */
+export async function registerGithubSubmission(
+  deps: EvidenceDeps,
+  input: { userId: string | null; invoiceId: string; repositoryUrl: string; commitSha: string; note?: string }
+): Promise<RegisteredSubmission> {
+  const userId = requireUser(input.userId)
+  const ctx = await loadPartyContext(deps, userId, input.invoiceId)
+  requireFreelancer(ctx)
+  if (!deps.github) throw new EvidenceError("GITHUB_SUBMISSIONS_UNAVAILABLE", "GitHub submissions aren't enabled on this server.")
+
+  const { fundingVerifiedOnchain } = await checkEligibility(deps, ctx.invoice)
+  if ((await deps.db.countSubmissions(ctx.invoice.id)) >= MAX_SUBMISSIONS_PER_INVOICE) {
+    throw new EvidenceError("SUBMISSION_LIMIT", `An invoice can have at most ${MAX_SUBMISSIONS_PER_INVOICE} submissions.`)
+  }
+  const folder = `${ctx.invoice.id}/${userId}`
+  if ((await deps.objects.countInFolder(folder)) >= MAX_OBJECTS_PER_UPLOAD_FOLDER) {
+    throw new EvidenceError("TOO_MANY_UPLOADS", "Too many unfinished uploads for this invoice. Submit or wait before uploading more.")
+  }
+
+  // Only now, with the caller authorized and the invoice eligible, is GitHub contacted.
+  let validated: GithubSubmissionResult
+  try {
+    validated = await deps.github(input.repositoryUrl, input.commitSha)
+  } catch {
+    throw new EvidenceError("GITHUB_UNAVAILABLE", "GitHub couldn't be reached. Try again shortly.")
+  }
+  if (!validated.ok) {
+    if (validated.error.code === "INVALID_URL" || validated.error.code === "INVALID_SHA") throw new EvidenceError("INVALID_INPUT", validated.error.message)
+    if (GITHUB_FIXABLE.has(validated.error.code)) throw new EvidenceError("GITHUB_REJECTED", validated.error.message)
+    throw new EvidenceError("GITHUB_UNAVAILABLE", validated.error.message)
+  }
+  const repositoryUrl = validated.data.repositoryUrl
+  const commitSha = validated.data.commitSha
+
+  // A retry of the same request returns the same submission instead of creating another "latest" one.
+  const latest = await deps.db.latestSubmission(ctx.invoice.id)
+  if (latest && latest.freelancer_user_id === userId && latest.repository_url === repositoryUrl && latest.commit_sha === commitSha) {
+    return { submission: latest, duplicate: true }
+  }
+
+  const bytes = new TextEncoder().encode(serializeGithubDeclaration(repositoryUrl, commitSha))
+  const objectId = (deps.newId ?? (() => crypto.randomUUID()))()
+  const path = buildEvidencePath({ invoiceId: ctx.invoice.id, userId, objectId, ext: "txt" })
+  await deps.objects.put(path, bytes, "text/plain")
+
+  const row: NewSubmission = {
+    invoice_uuid: ctx.invoice.id,
+    freelancer_user_id: userId,
+    freelancer_address: ctx.invoice.freelancer_address,
+    storage_path: path,
+    file_name: GITHUB_DECLARATION_FILE_NAME,
+    file_size: bytes.length,
+    mime_type: "text/plain",
+    note: (input.note ?? "").trim().slice(0, 2000),
+    funding_verified_onchain: fundingVerifiedOnchain,
+    repository_url: repositoryUrl,
+    commit_sha: commitSha,
+  }
+  try {
+    return { submission: await deps.db.insertSubmission(row), duplicate: false }
+  } catch (e) {
+    // Nothing references the object yet: do not leave it behind.
+    await deps.objects.remove(path).catch(() => undefined)
+    throw e
+  }
+}
+
 // ---- Retrieval ------------------------------------------------------------------------------------------------
 
 export interface DownloadGrant {
@@ -438,6 +540,13 @@ export function mapSubmissionInsertError(code: string | undefined, message: stri
   }
   if (/invoice criteria are incomplete/.test(message)) {
     return new EvidenceError("CRITERIA_INCOMPLETE", "This invoice's acceptance criteria aren't fully recorded yet.")
+  }
+  // Migration 9 (repository_url / commit_sha) is not applied to this database yet: GitHub submissions cannot be stored.
+  if (/repository_url|commit_sha/.test(message) && (code === "42703" || code === "PGRST204" || /column|schema cache/i.test(message)) && !/violates check constraint/i.test(message)) {
+    return new EvidenceError("GITHUB_SUBMISSIONS_UNAVAILABLE", "GitHub submissions need a database update that hasn't been applied yet.")
+  }
+  if (/submissions_(repository_url_format|commit_sha_format|github_fields_together)/.test(message)) {
+    return new EvidenceError("INVALID_INPUT", "The repository URL or commit SHA isn't in the required form.")
   }
   return null
 }

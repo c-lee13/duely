@@ -3,7 +3,7 @@
 import * as React from "react"
 import { ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useSession } from "@/hooks/use-duely"
+import { useRepository, useSession } from "@/hooks/use-duely"
 import type { DemoRole, Session } from "@/lib/frontend/domain"
 import { ErrorState, PageSkeleton } from "./primitives"
 import { useSwitchRole } from "./app-shell"
@@ -17,6 +17,7 @@ const LABEL: Record<DemoRole, string> = { client: "client", freelancer: "freelan
 export function RoleGate({ role, children }: { role: DemoRole; children: (session: Session) => React.ReactNode }) {
   const session = useSession()
   const switchRole = useSwitchRole()
+  const live = useRepository().mode === "api"
 
   if (session.error) return <ErrorState message={session.error} onRetry={session.reload} />
   if (!session.data) return <PageSkeleton />
@@ -26,8 +27,9 @@ export function RoleGate({ role, children }: { role: DemoRole; children: (sessio
         <ShieldAlert className="size-7 text-muted-foreground" aria-hidden />
         <p className="font-medium">This is the {LABEL[role]} view</p>
         <p className="max-w-md text-sm text-muted-foreground">
-          You&apos;re signed in as the demo {LABEL[session.data.role]}. Switch roles to continue. In live mode, access
-          will depend on your verified wallet, not this switch.
+          {live
+            ? `You're viewing the ${LABEL[session.data.role]} dashboard. One wallet can use both the client and freelancer dashboards: switch to continue. The switch only changes the view. What you can open or do is decided by your verified wallet on the server and by each invoice's own client and freelancer.`
+            : `You're signed in as the demo ${LABEL[session.data.role]}. Switch roles to continue.`}
         </p>
         <Button onClick={() => switchRole(role, false)}>Switch to {LABEL[role]}</Button>
       </div>

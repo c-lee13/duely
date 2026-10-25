@@ -32,7 +32,7 @@ import type { FakeObjectStore } from "./evidence"
 const INVOICE_SQL =
   "select id, chain_id::int as chain_id, contract_address, token_address, invoice_id::text as invoice_id, client_address, freelancer_address, amount::text as amount, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date::text as due_date, onchain_status, advance_amount::text as advance_amount, chain_synced_at::text as chain_synced_at, created_at::text as created_at from invoices"
 const SUB_SQL =
-  "select id, invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size::int as file_size, mime_type, note, funding_verified_onchain, created_at::text as created_at from submissions"
+  "select id, invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size::int as file_size, mime_type, note, funding_verified_onchain, repository_url, commit_sha, created_at::text as created_at from submissions"
 const EVAL_SQL =
   "select id, submission_id, invoice_uuid, criteria_hash, criteria_version, model, prompt_version, state, score, passed, criteria_results, summary, pass_rule, simulated, error_message, created_at::text as created_at, evaluated_at::text as evaluated_at from evaluations"
 const ADV_SQL =

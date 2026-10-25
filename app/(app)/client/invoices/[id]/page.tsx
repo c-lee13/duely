@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useParams } from "next/navigation"
-import { AlertOctagon, ArrowLeft, CheckCircle2, FileText, Lock } from "lucide-react"
+import { AlertOctagon, ArrowLeft, CheckCircle2, ExternalLink, FileText, GitBranch, Lock } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { GithubEvaluationPanel } from "@/components/duely/github-evaluation"
 import { RoleGate } from "@/components/duely/role-gate"
 import { useToast } from "@/components/duely/toast"
 import {
@@ -40,6 +41,8 @@ import { useAction, useInvoiceBundle, usePollWhile, useRepository } from "@/hook
 import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import type { InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canClientApprove, canClientDispute, canFund, evaluationFor, settlementProjection } from "@/lib/frontend/eligibility"
+import { isGithubEvaluation } from "@/lib/frontend/github-evaluation"
+import { githubLinks, shortSha } from "@/lib/frontend/github-input"
 import { formatToken, isZero } from "@/lib/frontend/token"
 
 function Detail({ session, invoiceId }: { session: Session; invoiceId: string }) {
@@ -74,6 +77,7 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
 
   const latest = submissions[0]
   const latestEval = evaluationFor(latest, evaluations)
+  const latestGithub = latest ? githubLinks(latest.repositoryUrl, latest.commitSha) : null
   const proj = settlementProjection(invoice)
   const hasAdvance = !isZero(invoice.advanceAmount)
   const busy = fund.pending || approve.pending || dispute.pending
@@ -220,10 +224,33 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
-                <p className="font-medium">{latest.fileName}</p>
-                <p className="text-muted-foreground">
-                  {formatBytes(latest.fileSize)} · submitted {formatDate(latest.createdAt, true)}
-                </p>
+                {latestGithub ? (
+                  <>
+                    <p className="flex items-center gap-2 font-medium">
+                      <GitBranch className="size-4 shrink-0" aria-hidden /> GitHub repository
+                    </p>
+                    <p className="break-all">
+                      <a href={latestGithub.repo} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
+                        {latestGithub.label} <ExternalLink className="size-3.5" aria-hidden />
+                        <span className="sr-only">(opens GitHub in a new tab)</span>
+                      </a>
+                    </p>
+                    <p className="text-muted-foreground">
+                      Commit{" "}
+                      <a href={latestGithub.commit} target="_blank" rel="noopener noreferrer" className="font-mono text-foreground underline-offset-2 hover:underline" title={latest.commitSha ?? undefined}>
+                        {shortSha(latest.commitSha ?? "")}
+                      </a>{" "}
+                      · submitted {formatDate(latest.createdAt, true)}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">{latest.fileName}</p>
+                    <p className="text-muted-foreground">
+                      {formatBytes(latest.fileSize)} · submitted {formatDate(latest.createdAt, true)}
+                    </p>
+                  </>
+                )}
                 {latest.note && <p className="pt-2">“{latest.note}”</p>}
               </CardContent>
             </Card>
@@ -232,7 +259,7 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
               <CardContent className="text-sm text-muted-foreground">No evidence has been submitted yet.</CardContent>
             </Card>
           )}
-          <EvaluationPanel evaluation={latestEval} />
+          {isGithubEvaluation(latestEval) ? <GithubEvaluationPanel evaluation={latestEval} /> : <EvaluationPanel evaluation={latestEval} />}
           <CriteriaList invoice={invoice} />
         </div>
 

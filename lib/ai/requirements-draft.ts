@@ -282,7 +282,7 @@ export interface RequirementsDraft {
   counts: { requested: number; suggested: number }
 }
 
-export type DraftStage = "input" | "unavailable" | "generate" | "parse" | "validation"
+export type DraftStage = "input" | "unavailable" | "auth" | "generate" | "parse" | "validation"
 export type DraftResult = { ok: true; draft: RequirementsDraft } | { ok: false; stage: DraftStage; problems: string[] }
 
 const failure = (stage: DraftStage, ...problems: string[]): DraftResult => ({ ok: false, stage, problems })
@@ -320,7 +320,10 @@ export async function draftRequirements(generate: GenerateFn, description: strin
   try {
     raw = await generate(buildRequirementsPrompt(description))
   } catch (e) {
-    return failure("generate", "The drafting model couldn't be reached.", `category: ${generateErrorCategory(e)}`)
+    const category = generateErrorCategory(e)
+    // 401/403: Google rejected the credential (bad, revoked or restricted key). Retrying can't help, so it is reported separately.
+    if (category === "http_401" || category === "http_403") return failure("auth", "The drafting model rejected the server's credentials.", `category: ${category}`)
+    return failure("generate", "The drafting model couldn't be reached.", `category: ${category}`)
   }
   let json: unknown
   try {

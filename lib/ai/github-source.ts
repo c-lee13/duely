@@ -103,6 +103,9 @@ export function isSafeRepoPath(path: unknown): path is string {
   return segments.every((s) => s !== "" && s !== "." && s !== ".." && s.toLowerCase() !== ".git" && s.trim() === s)
 }
 
+/** Simultaneous GitHub requests per retrieval. */
+const FETCH_CONCURRENCY = 8
+
 const skip = (path: string, reason: SkipReason, message: string): SkippedFile => ({ path, reason, message })
 
 /** Reads at most `cap` characters of a response body, or returns null if it is larger (the rest is discarded unread). */
@@ -252,15 +255,36 @@ export async function retrieveGithubSource(commit: ValidatedCommit, paths: unkno
     queue.push({ path: raw, language })
   }
 
+  // Files are fetched with bounded concurrency (strictly one-by-one made a 60-file repository take minutes), then the total-size
+  // budget and rate-limit cutoff are applied in listing order, so the result is identical to a sequential read.
+  const outcomes: Array<FileOutcome | undefined> = new Array(queue.length)
+  let next = 0
+  let stopped = false
+  const worker = async () => {
+    while (!stopped && next < queue.length) {
+      const i = next++
+      const item = queue[i]
+      outcomes[i] = await fetchOne(doFetch, repo, commit.commitSha, item.path, item.language, options, maxFileBytes, maxTotalBytes)
+      // Once GitHub rate-limits us, stop starting new requests; the rest are reported as not attempted.
+      if ("skipped" in outcomes[i]! && (outcomes[i] as { skipped: SkippedFile }).skipped.reason === "rate_limited") stopped = true
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(FETCH_CONCURRENCY, queue.length) }, worker))
+
   let totalBytes = 0
   let rateLimited = false
-  for (const item of queue) {
-    if (rateLimited) {
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i]
+    const out = outcomes[i]
+    if (rateLimited || !out) {
       skipped.push(skip(item.path, "rate_limited", "Not attempted: GitHub's rate limit was reached."))
       continue
     }
-    const out = await fetchOne(doFetch, repo, commit.commitSha, item.path, item.language, options, maxFileBytes, maxTotalBytes - totalBytes)
     if ("file" in out) {
+      if (out.file.bytes > maxTotalBytes - totalBytes) {
+        skipped.push(skip(item.path, "total_limit", "Including this file would exceed the total content limit."))
+        continue
+      }
       files.push(out.file)
       totalBytes += out.file.bytes
     } else {

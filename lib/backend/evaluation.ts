@@ -8,6 +8,9 @@ import { DEMO_MODEL, DEMO_PROMPT_VERSION } from "./demo-evaluator"
 import { DuplicateEvaluationError, UnsupportedEvidenceError, type BackendDeps, type EvaluationData, type EvaluatorOutput } from "./ports"
 
 /** How much of the stored evidence an evaluator is handed. */
+/** A "running" evaluation older than this is treated as abandoned and may be retried. */
+export const STALE_RUNNING_MS = 3 * 60_000
+
 export const EVALUATION_EVIDENCE_BYTES = 256 * 1024
 
 /**
@@ -56,8 +59,13 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
     throw new ApiError("STALE_SUBMISSION", "A newer submission exists for this invoice. Only the latest submission can be evaluated.")
   }
 
-  const existing = await deps.db.findLiveEvaluation(submission.id)
+  let existing = await deps.db.findLiveEvaluation(submission.id)
   if (existing?.state === "completed") return { evaluation: toEvaluationView(existing), invoiceId: invoice.id, duplicate: true }
+  // A run whose process died (restart, crash, timeout) would otherwise block every retry forever. No real evaluation takes this long.
+  if (existing?.state === "running" && Date.now() - Date.parse(existing.created_at) > STALE_RUNNING_MS) {
+    await deps.db.failEvaluation(existing.id, "evaluation abandoned (no result after 3 minutes)")
+    existing = null
+  }
   if (existing?.state === "running") throw new ApiError("EVALUATION_IN_PROGRESS", "This submission is already being evaluated.")
 
   if (deps.evaluator.mode === "disabled") {

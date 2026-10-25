@@ -65,6 +65,13 @@ export async function handleDraftRequirements(request: Request, ctx: DraftHandle
         return errorResponse(400, "INVALID_INPUT", result.problems[0] ?? "Describe the project in a little more detail.")
       case "unavailable":
         return errorResponse(503, "INTEGRATION_UNAVAILABLE", "AI drafting isn't available right now: Gemini is not configured on the server.")
+      case "auth":
+        // Operator misconfiguration, not something the user can fix: the key is invalid, revoked or restricted.
+        console.error("agreement draft failed: Gemini rejected GEMINI_API_KEY (", result.problems.slice(1).join(" | "), "). Check GEMINI_API_KEY in .env.local / .env and restart the server.")
+        return errorResponse(503, "AI_AUTH_FAILED", "AI drafting is misconfigured on the server (the Gemini API key was rejected). You can write the criteria yourself for now.")
+      case "generate":
+        console.error("agreement draft failed:", result.stage, result.problems.slice(0, 12).join(" | "), `| ${Date.now() - startedAt}ms`)
+        return errorResponse(502, "PROVIDER_UNAVAILABLE", "The AI service is busy or unreachable right now. Try again in a moment, or write the criteria yourself.")
       default:
         // The model was unreachable or answered unusably. Nothing from the provider is passed on to the browser; the stage and the
         // validation paths (field names and rule text, no content) go to the server log so the failure can be diagnosed.

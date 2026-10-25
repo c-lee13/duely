@@ -310,8 +310,29 @@ describe("rate limiting", () => {
     const d = data(r)
     assert.deepEqual(d.files.map((f) => f.path), ["contracts/Vault.sol"])
     assert.deepEqual(d.skipped.map((s) => [s.path, s.reason]), [["src/app.tsx", "rate_limited"], ["src/index.ts", "rate_limited"], ["tools/run.py", "rate_limited"]])
-    assert.equal(calls.length, 2)
+    assert.ok(calls.length <= 4) // requests already in flight when the limit hit may have been sent; no more after that
     assert.equal(d.complete, false)
+  })
+
+  it("fetches files concurrently but returns them in listing order", async () => {
+    let inFlight = 0
+    let peak = 0
+    const gate = (path: string) => async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 20))
+      inFlight--
+      return { body: fileBody(path, "x\n") }
+    }
+    const fn = (async (input: RequestInfo | URL) => {
+      const path = decodeURIComponent(new URL(String(input)).pathname.split("/contents/")[1])
+      const reply = await gate(path)()
+      return new Response(JSON.stringify(reply.body), { status: 200 })
+    }) as unknown as typeof fetch
+    const r = await retrieveGithubSource(COMMIT, ALL, { fetch: fn })
+    const d = data(r)
+    assert.ok(peak > 1, "expected overlapping requests")
+    assert.deepEqual(d.files.map((f) => f.path), ALL)
   })
 
   it("treats 403 with no quota left as a rate limit", async () => {

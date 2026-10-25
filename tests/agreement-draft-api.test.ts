@@ -99,8 +99,18 @@ describe("POST /api/agreements/draft", () => {
     assert.equal(r.body.error.code, "INTEGRATION_UNAVAILABLE")
   })
 
-  it("reports a Gemini outage or unusable output as 502 with a generic message", async () => {
-    for (const client of [fakeClient(new Error("boom")), fakeClient("not json"), fakeClient(JSON.stringify({ ...MODEL_JSON, budget: "5000 USD" }))]) {
+  it("reports a Gemini outage as 502 PROVIDER_UNAVAILABLE", async () => {
+    for (const err of [new Error("boom"), Object.assign(new Error("overloaded"), { status: 503 }), Object.assign(new Error("quota"), { status: 429 }), new TypeError("fetch failed")]) {
+      resetDraftRateLimit()
+      const r = await post(ctx({ client: fakeClient(err) }), { description: DESCRIPTION })
+      assert.equal(r.status, 502)
+      assert.equal(r.body.error.code, "PROVIDER_UNAVAILABLE")
+      assert.ok(!/boom|quota|overloaded/i.test(r.body.error.message))
+    }
+  })
+
+  it("reports unusable output as 502 DRAFT_FAILED with a generic message", async () => {
+    for (const client of [fakeClient("not json"), fakeClient(JSON.stringify({ ...MODEL_JSON, budget: "5000 USD" }))]) {
       resetDraftRateLimit()
       const r = await post(ctx({ client }), { description: DESCRIPTION })
       assert.equal(r.status, 502)
@@ -141,6 +151,18 @@ describe("failure diagnostics (server log only)", () => {
       console.error = orig
     }
   }
+
+  it("reports a Gemini auth failure (401/403) as 503 AI_AUTH_FAILED naming nothing secret", async () => {
+    for (const status of [401, 403]) {
+      resetDraftRateLimit()
+      const err = Object.assign(new Error(`API key not valid ${ENV.GEMINI_API_KEY}`), { name: "ApiError", status })
+      const { r, log } = await logged(fakeClient(err))
+      assert.equal(r.status, 503)
+      assert.equal(r.body.error.code, "AI_AUTH_FAILED")
+      assert.ok(!r.body.error.message.includes(ENV.GEMINI_API_KEY) && !log.includes(ENV.GEMINI_API_KEY))
+      assert.match(log, /GEMINI_API_KEY/)
+    }
+  })
 
   it("names the failing stage and a safe reason for each kind of failure, never the key, message or description", async () => {
     const apiErr = Object.assign(new Error(`bad request for ${DESCRIPTION} key ${ENV.GEMINI_API_KEY}`), { name: "ApiError", status: 404 })

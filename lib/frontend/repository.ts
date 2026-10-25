@@ -16,6 +16,8 @@ import type {
   TokenAmount,
   TransactionRecord,
 } from "./domain"
+import type { ProgressListener } from "./tx-runner"
+import type { WalletState } from "./wallet-chain"
 
 /**
  * The one data boundary the UI talks to. `MockDuelyRepository` implements it
@@ -32,10 +34,13 @@ export interface DuelyRepository {
 
   listInvoices(role: DemoRole, wallet: string): Promise<InvoiceDetail[]>
   getInvoice(invoiceId: InvoiceId): Promise<InvoiceBundle>
-  /** Wallet tx: createInvoice. Resolves with the new invoice once confirmed. */
-  createInvoice(input: CreateInvoiceInput): Promise<InvoiceDetail>
-  /** Wallet tx: ERC-20 approve + fundInvoice. */
-  fundInvoice(invoiceId: InvoiceId): Promise<void>
+  /**
+   * Wallet tx: createInvoice, then registration with the backend. Resolves with the new invoice ONLY after the chain
+   * confirmed the transaction (and the backend verified it). `onProgress` reports each wallet step as it happens.
+   */
+  createInvoice(input: CreateInvoiceInput, onProgress?: ProgressListener): Promise<InvoiceDetail>
+  /** Wallet tx: ERC-20 approve (exact amount, only if needed) + fundInvoice. Resolves after both are confirmed. */
+  fundInvoice(invoiceId: InvoiceId, onProgress?: ProgressListener): Promise<void>
 
   submitEvidence(input: SubmitEvidenceInput): Promise<Submission>
   /** Records a GitHub repository + commit as the submission (POST /api/submissions { type: "github" }). Nothing is paid. */
@@ -45,16 +50,21 @@ export interface DuelyRepository {
 
   /** Explicit freelancer request; backend signer submits approveAdvance. */
   requestAdvance(invoiceId: InvoiceId): Promise<AdvanceRequestResult>
-  /** Client wallet tx: approveWork. */
-  approveInvoice(invoiceId: InvoiceId): Promise<void>
-  /** Client wallet tx: disputeInvoice. */
-  disputeInvoice(invoiceId: InvoiceId): Promise<void>
+  /** Client wallet tx: approveCompletion. */
+  approveInvoice(invoiceId: InvoiceId, onProgress?: ProgressListener): Promise<void>
+  /** Client wallet tx: raiseDispute. */
+  disputeInvoice(invoiceId: InvoiceId, onProgress?: ProgressListener): Promise<void>
+  /**
+   * Operator wallet tx: resolveDispute. `releaseToFreelancer: true` settles normally; `false` refunds the client's whole
+   * escrow. An advance already paid is never clawed back (it is the reserve's loss).
+   */
+  resolveDispute(invoiceId: InvoiceId, releaseToFreelancer: boolean, onProgress?: ProgressListener): Promise<void>
 
   getTimeline(invoiceId: InvoiceId): Promise<TimelineEvent[]>
   listTransactions(): Promise<TransactionRecord[]>
   getBalances(): Promise<PlatformBalances>
-  /** Platform role: depositReserve. */
-  depositReserve(amount: TokenAmount): Promise<void>
+  /** Operator wallet tx: ERC-20 approve (exact amount, only if needed) + depositReserve. */
+  depositReserve(amount: TokenAmount, onProgress?: ProgressListener): Promise<void>
 
   /** Change notifications so open screens refresh. */
   subscribe(listener: () => void): () => void
@@ -64,6 +74,20 @@ export interface DuelyRepository {
 
   /** Present only in API (live) mode. The view role is a UI preference; the server authorizes every request. */
   readonly live?: LiveControls
+
+  /** Present only in API (live) mode: the browser wallet used for transactions. */
+  readonly wallet?: WalletControls
+}
+
+export interface WalletControls {
+  /** Reads MetaMask without prompting. */
+  getState(): Promise<WalletState>
+  /** Prompts MetaMask to connect this site. */
+  connect(): Promise<WalletState>
+  /** Switches MetaMask to XRPL EVM Testnet (adding it if unknown). */
+  switchNetwork(): Promise<WalletState>
+  /** Notified when the account or network changes in MetaMask. */
+  subscribe(listener: () => void): () => void
 }
 
 export interface LiveControls {

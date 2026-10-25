@@ -1,0 +1,51 @@
+{
+  "chainId": 1449000,
+  "network": "xrpl-evm-testnet",
+  "explorer": "https://explorer.testnet.xrplevm.org",
+  "deployer": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+  "deployedAtUnixMs": 1792881442287,
+  "sourceCommit": "9f3e548",
+  "paymentToken": {
+    "name": "Duely Demo USD (dUSD) - DEMO TOKEN, not real USDC/RLUSD",
+    "address": "0x5ff7b6ae08c37868303e7a815308af476421506c",
+    "decimals": 6
+  },
+  "invoiceAdvance": {
+    "address": "0x328fc0dbf3d1f704b065192f4bfc7583bfa550e0",
+    "paymentToken": "0x5ff7b6ae08c37868303e7A815308Af476421506c"
+  },
+  "roles": {
+    "admin": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "operator": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "evaluator": "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+  },
+  "transactions": [
+    {
+      "contractName": "MockUSDC",
+      "contractAddress": "0x5ff7b6ae08c37868303e7a815308af476421506c",
+      "transactionHash": "0xe7fb8e6ae581d60862bfdc49def910efd0228ebab652387ab4fda3301de8d69b",
+      "blockNumber": 9225054,
+      "gasUsed": 1088830,
+      "constructorArguments": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ],
+      "from": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0xe7fb8e6ae581d60862bfdc49def910efd0228ebab652387ab4fda3301de8d69b"
+    },
+    {
+      "contractName": "InvoiceAdvance",
+      "contractAddress": "0x328fc0dbf3d1f704b065192f4bfc7583bfa550e0",
+      "transactionHash": "0x4fbfc89eb7671437643998796a7421a1f3aa80f5d408d605cf67f37cf28b49c5",
+      "blockNumber": 9225054,
+      "gasUsed": 2497684,
+      "constructorArguments": [
+        "0x5ff7b6ae08c37868303e7A815308Af476421506c",
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+        "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+      ],
+      "from": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0x4fbfc89eb7671437643998796a7421a1f3aa80f5d408d605cf67f37cf28b49c5"
+    }
+  ]
+}

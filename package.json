@@ -14,7 +14,13 @@
     "test": "tsx --conditions=react-server --test tests/*.test.ts",
     "seed:dev-fixture": "tsx scripts/seed-dev-fixture.ts",
     "test:gemini": "tsx --conditions=react-server scripts/test-gemini.ts",
-    "test:gemini-evaluation": "tsx --conditions=react-server scripts/test-gemini-evaluation.ts"
+    "test:gemini-evaluation": "tsx --conditions=react-server scripts/test-gemini-evaluation.ts",
+    "test:chain": "node --import ./lib/chain/test/register.mjs --test \"lib/chain/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "chain:abi": "node contracts/script/export-abi.mjs",
+    "chain:integration": "node --env-file=.env --import ./lib/chain/test/register.mjs scripts/chain-integration.ts",
+    "chain:rlusd-readiness": "node --env-file=.env --import ./lib/chain/test/register.mjs scripts/rlusd-readiness.ts",
+    "chain:rehearse": "node --env-file=.env --import ./lib/chain/test/register.mjs scripts/rehearse-fork.ts",
+    "chain:verify-mint": "node --env-file=.env --import ./lib/chain/test/register.mjs scripts/verify-mint.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

@@ -12,6 +12,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
+    // Without this TypeScript auto-loads every @types/* it can see, including empty stubs in ancestor
+    // directories (e.g. ~/node_modules/@types), which fails the build with TS2688.
+    "types": ["node"],
     "incremental": true,
     "plugins": [
       {

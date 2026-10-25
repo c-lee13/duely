@@ -28,7 +28,10 @@ import type {
 import { DomainError } from "@/lib/frontend/errors"
 import { deriveSubmissionStatus } from "@/lib/frontend/eligibility"
 import { mockCriteriaDigest } from "@/lib/frontend/criteria-digest"
-import { advanceFor, formatToken, gte, isZero, sub, sum, toBig } from "@/lib/frontend/token"
+import { advanceFor, formatToken as formatTokenOf, gte, isZero, MOCK_TOKEN, sub, sum, toBig } from "@/lib/frontend/token"
+
+/** Mock messages always speak in the simulated DEMO token. */
+const formatToken = (amount: string) => formatTokenOf(amount, { token: MOCK_TOKEN })
 import type { DemoSettings } from "@/lib/frontend/repository"
 import { nameForWallet } from "./actors"
 
@@ -301,7 +304,7 @@ export function approveWork(s: MockState, caller: Address, invoiceId: InvoiceId,
   invoice.reserveCredited = reserveCredit
   invoice.freelancerReceived = sum([invoice.freelancerReceived, toFreelancer])
   invoice.onchainStatus = "Settled"
-  confirmTx(s, ctx, { action: "approveWork", from: caller, invoiceId, amount: invoice.amount })
+  confirmTx(s, ctx, { action: "approveCompletion", from: caller, invoiceId, amount: invoice.amount })
   addTimeline(s, {
     invoiceId,
     at: ctx.at,
@@ -323,7 +326,7 @@ export function disputeInvoice(s: MockState, caller: Address, invoiceId: Invoice
   }
   const hadAdvance = !isZero(invoice.advanceAmount)
   invoice.onchainStatus = "Disputed"
-  confirmTx(s, ctx, { action: "disputeInvoice", from: caller, invoiceId })
+  confirmTx(s, ctx, { action: "raiseDispute", from: caller, invoiceId })
   addTimeline(s, {
     invoiceId,
     at: ctx.at,

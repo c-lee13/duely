@@ -75,3 +75,11 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+# ==========================================
+# Live-run artifacts (A6.6.x): never commit
+# ==========================================
+/rlusd-run*.json
+/dusd-run*.json
+/chain-run*.json
+/*-run[0-9]*.json
+env.backup

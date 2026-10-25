@@ -5,7 +5,7 @@ import path from "node:path"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { Clock, FakeObjectStore } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, TEST_SCOPE } from "./helpers/backend"
 import { handleAdvance, handleEvaluate } from "@/lib/backend/handlers"
 import { resolveEvaluatorMode } from "@/lib/backend/demo-evaluator"
 import { disabledEvaluator, type BackendDeps } from "@/lib/backend/ports"
@@ -110,7 +110,7 @@ beforeEach(async () => {
   }
   const chain = new FakeChainAdapter()
   chain.available = false
-  deps = { db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator: createGeminiEvaluator({ generate, model: MODEL }) }
+  deps = { scope: TEST_SCOPE, db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator: createGeminiEvaluator({ generate, model: MODEL }) }
 })
 
 describe("POST /api/evaluate with the Gemini evaluator (mocked)", () => {
@@ -321,7 +321,7 @@ describe("evaluations never trigger payments", () => {
     assert.equal(await count("advance_requests"), 0)
     assert.equal(await count("transactions"), 0)
     assert.equal(signer.calls, 0)
-    assert.deepEqual(chain.calls, { creation: 0, state: 0, reserve: 0 })
+    assert.deepEqual(chain.calls, { creation: 0, state: 0, reserve: 0, tx: 0, found: 0 })
   })
 
   it("an advance still needs its own explicit request, and with no chain/signer it is refused even after a real passing evaluation", async () => {

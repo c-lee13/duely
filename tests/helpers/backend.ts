@@ -12,8 +12,12 @@ import {
   type BackendDb,
   type BackendDeps,
   type ChainAdapter,
+  type ChainAdvanceFound,
+  type ChainAdvanceTxRef,
   type ChainInvoiceCreation,
+  type ChainInvoiceRef,
   type ChainInvoiceState,
+  type ChainTxStatus,
   type EvaluationData,
   type Evaluator,
   type EvaluatorInput,
@@ -21,6 +25,7 @@ import {
   type InvoiceData,
   type SubmissionData,
 } from "@/lib/backend/ports"
+import type { DeploymentScope } from "@/lib/shared/deployment-scope"
 import { as } from "./db"
 import type { FakeObjectStore } from "./evidence"
 
@@ -31,7 +36,7 @@ const SUB_SQL =
 const EVAL_SQL =
   "select id, submission_id, invoice_uuid, criteria_hash, criteria_version, model, prompt_version, state, score, passed, criteria_results, summary, pass_rule, simulated, error_message, created_at::text as created_at, evaluated_at::text as evaluated_at from evaluations"
 const ADV_SQL =
-  "select a.id, a.invoice_uuid, a.requester_user_id, a.requester_address, a.submission_id, a.evaluation_id, a.status, a.amount::text as amount, a.reason, a.idempotency_key, a.transaction_id, t.tx_hash, a.created_at::text as created_at from advance_requests a left join transactions t on t.id = a.transaction_id"
+  "select a.id, a.invoice_uuid, a.requester_user_id, a.requester_address, a.submission_id, a.evaluation_id, a.status, a.amount::text as amount, a.reason, a.idempotency_key, a.transaction_id, t.tx_hash, t.from_address as tx_from, a.created_at::text as created_at from advance_requests a left join transactions t on t.id = a.transaction_id"
 
 /** BackendDb over the REAL schema (all migrations applied), run as the service_role database role. */
 export function createPgBackendDb(db: PGlite): BackendDb {
@@ -53,6 +58,9 @@ export function createPgBackendDb(db: PGlite): BackendDb {
     async listInvoicesForWallets(addresses) {
       if (addresses.length === 0) return []
       return (await q<InvoiceData>(`${INVOICE_SQL} where client_address = any($1) or freelancer_address = any($1) order by created_at desc, id desc`, [addresses])).rows
+    },
+    async listInvoicesInScope(scope, limit) {
+      return (await q<InvoiceData>(`${INVOICE_SQL} where chain_id = $1 and contract_address = $2 order by created_at desc, id desc limit $3`, [scope.chainId, scope.contractAddress.toLowerCase(), limit])).rows
     },
     async findInvoicesByOnchainId(onchainId, addresses) {
       if (addresses.length === 0) return []
@@ -119,6 +127,37 @@ export function createPgBackendDb(db: PGlite): BackendDb {
     async failAdvanceRequest(id, reason) {
       await q("update advance_requests set status='failed', reason=$2 where id=$1 and status='pending'", [id, reason])
     },
+    getAdvanceRequest: (id) => one<AdvanceRequestData>(`${ADV_SQL} where a.id = $1`, [id]),
+    async listPendingAdvances(invoiceId) {
+      return (await q<AdvanceRequestData>(`${ADV_SQL} where a.invoice_uuid = $1 and a.status = 'pending'`, [invoiceId])).rows
+    },
+    async recordAdvanceConfirmed(a) {
+      // Same three conditional steps as the Supabase adapter, in the same order.
+      await q(
+        "update transactions set status='confirmed', block_number=$2, block_hash=$3, log_index=$4, receipt=$5::jsonb, confirmed_at=now(), error=null where id=$1 and status='pending'",
+        [a.transactionId, a.blockNumber.toString(), a.blockHash, a.logIndex, JSON.stringify(a.receipt)]
+      )
+      await q("update advance_requests set status='paid' where id=$1 and status='pending'", [a.requestId])
+      if (a.cache) {
+        await q("update invoices set onchain_status=$2, advance_amount=$3::numeric, chain_synced_at=now(), chain_synced_block=$4 where id=$1", [a.invoiceId, a.cache.status, a.advanceAmount, a.cache.blockNumber.toString()])
+      }
+      return (await one<AdvanceRequestData>(`${ADV_SQL} where a.id = $1`, [a.requestId]))!
+    },
+    async recordAdvanceFailed(a) {
+      if (a.transactionId) await q("update transactions set status='failed', error=$2 where id=$1 and status='pending'", [a.transactionId, a.reason])
+      await q("update advance_requests set status='failed', reason=$2 where id=$1 and status='pending'", [a.requestId, a.reason])
+    },
+    async noteAdvanceReview(requestId, reason) {
+      await q("update advance_requests set reason=$2 where id=$1 and status='pending'", [requestId, reason])
+    },
+    async attachRecoveredTransaction(a) {
+      const tx = await one<{ id: string }>(
+        "insert into transactions (invoice_uuid, chain_id, action, status, from_address, amount, tx_hash) values ($1,$2,'approveAdvance','pending',$3,$4::numeric,$5) returning id",
+        [a.invoiceId, a.chainId, a.from, a.amount, a.txHash]
+      )
+      await q("update advance_requests set transaction_id = $2 where id = $1", [a.requestId, tx!.id])
+      return (await one<AdvanceRequestData>(`${ADV_SQL} where a.id = $1`, [a.requestId]))!
+    },
     async registerInvoice(a) {
       const r = await one<{ o_id: string; o_created: boolean }>(
         "select * from public.register_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13::date,$14,$15,$16,$17)",
@@ -133,7 +172,30 @@ export function createPgBackendDb(db: PGlite): BackendDb {
 
 export class FakeChainAdapter implements ChainAdapter {
   available = true
-  calls = { creation: 0, state: 0, reserve: 0 }
+  calls = { creation: 0, state: 0, reserve: 0, tx: 0, found: 0 }
+  /** What a look at the broadcast approveAdvance reports (default: not mined yet). */
+  advanceTx: ChainTxStatus | Error = { state: "pending" }
+  lastTxRef: ChainAdvanceTxRef | null = null
+  lastTxWaitMs: number | undefined
+  found: ChainAdvanceFound | null | Error = null
+  /** On-chain role holders by role, lower-case addresses. */
+  roles: Record<"operator" | "evaluator" | "admin", Set<string>> = { operator: new Set(), evaluator: new Set(), admin: new Set() }
+  async hasRole(role: "operator" | "evaluator" | "admin", address: Address): Promise<boolean> {
+    return this.roles[role].has(address.toLowerCase())
+  }
+  async getAdvanceTransaction(ref: ChainAdvanceTxRef, opts?: { waitMs?: number }): Promise<ChainTxStatus> {
+    this.calls.tx++
+    this.lastTxRef = ref
+    this.lastTxWaitMs = opts?.waitMs
+    if (this.advanceTx instanceof Error) throw this.advanceTx
+    return this.advanceTx
+  }
+  async findAdvancePaid(_ref: ChainInvoiceRef): Promise<ChainAdvanceFound | null> {
+    void _ref
+    this.calls.found++
+    if (this.found instanceof Error) throw this.found
+    return this.found
+  }
   creation: ChainInvoiceCreation | Error = new ChainUnavailableError()
   state: ChainInvoiceState | Error = new ChainUnavailableError()
   reserve: bigint | Error = BigInt(0)
@@ -142,7 +204,8 @@ export class FakeChainAdapter implements ChainAdapter {
     if (this.creation instanceof Error) throw this.creation
     return this.creation
   }
-  async getInvoiceState(): Promise<ChainInvoiceState> {
+  async getInvoiceState(_ref?: ChainInvoiceRef): Promise<ChainInvoiceState> {
+    void _ref
     this.calls.state++
     if (this.state instanceof Error) throw this.state
     return this.state
@@ -156,12 +219,18 @@ export class FakeChainAdapter implements ChainAdapter {
 
 export class FakeSigner implements AdvanceSigner {
   available = true
+  address: Address | null = ("0x" + "5".repeat(40)) as Address
   calls = 0
   fail = false
+  /** The evaluation hash and reference of the most recent broadcast. */
+  lastEvaluationHash: Bytes32 | null = null
+  lastRef: ChainInvoiceRef | null = null
   /** The hash returned by the most recent broadcast. Every broadcast gets a unique hash, like a real chain. */
   hash: Bytes32 = ("0x" + "00".repeat(32)) as Bytes32
-  async submitApproveAdvance() {
+  async submitApproveAdvance(ref?: ChainInvoiceRef, evaluationHash?: Bytes32) {
     this.calls++
+    this.lastRef = ref ?? null
+    this.lastEvaluationHash = evaluationHash ?? null
     if (this.fail) throw new Error("rpc: nonce too low")
     this.hash = ("0x" + this.calls.toString(16).padStart(64, "0")) as Bytes32
     return { txHash: this.hash, from: ("0x" + "5".repeat(40)) as Address }
@@ -196,7 +265,18 @@ export interface Harness {
   store: FakeObjectStore
 }
 
+/** The fake deployment every Track B test file seeds its invoices under (chain 1440002, contract 0xeee…, token 0xddd…). */
+export const TEST_SCOPE: DeploymentScope = {
+  chainId: 1440002,
+  contractAddress: "0x" + "e".repeat(40),
+  tokenAddress: "0x" + "d".repeat(40),
+  key: "test",
+  symbol: "TEST",
+  decimals: 18,
+}
+
 export const unavailableDeps = (db: PGlite, store: FakeObjectStore): BackendDeps => ({
+  scope: TEST_SCOPE,
   db: createPgBackendDb(db),
   objects: store,
   chain: unavailableChainAdapter,

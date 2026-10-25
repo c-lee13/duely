@@ -72,7 +72,7 @@ export interface ApiInvoiceDetail {
   dueDate: string | null
   submissions: Array<{ submissionId: string; note: string; fileName: string; fileSize: number; mimeType: string; createdAt: string; repositoryUrl?: string | null; commitSha?: string | null }>
   evaluations: ApiEvaluation[]
-  advanceRequests: Array<{ requestId: string; status: AdvanceRequest["status"]; amount: string; reason: string | null; txHash: string | null; createdAt: string }>
+  advanceRequests: Array<{ requestId: string; status: AdvanceRequest["status"]; amount: string; reason: string | null; txHash: string | null; txFrom?: string | null; createdAt: string }>
 }
 
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
@@ -89,6 +89,7 @@ export function figuresFor(status: OnchainInvoiceStatus, amount: string, advance
   if (!verified) return zero
   switch (status) {
     case "Created":
+    case "Cancelled":
       return zero
     case "Funded":
       return { escrowBalance: amount, freelancerReceived: "0", reserveCredited: "0" }
@@ -203,7 +204,7 @@ export function buildTimeline(detail: ApiInvoiceDetail): TimelineEvent[] {
       title: inv.isTestFixture ? "Test fixture saved" : "Invoice registered",
       description: inv.isTestFixture
         ? "A development test fixture. It does not exist on any blockchain."
-        : "The invoice record and its frozen criteria were saved. Escrow and payments are not read from the chain yet.",
+        : "The invoice was created on-chain and registered with Duely; its acceptance criteria are frozen.",
       simulated: false,
     },
   ]
@@ -279,9 +280,25 @@ export function toBundle(detail: ApiInvoiceDetail, mine: readonly string[]): Inv
       amount: a.amount,
       createdAt: a.createdAt,
       reason: a.reason ?? undefined,
+      txHash: (a.txHash as `0x${string}` | null) ?? undefined,
     })),
     timeline: buildTimeline(detail),
-    transactions: [], // no on-chain transaction data is exposed yet
+    // Server-signed payouts only (client wallet transactions come from this browser's log). `confirmed` here means the backend
+    // reconciled a verified receipt; a pending advance is pending.
+    transactions: detail.advanceRequests
+      .filter((a) => a.txHash && a.txFrom)
+      .map((a) => ({
+        id: `advance-tx-${a.requestId}`,
+        action: "approveAdvance" as const,
+        status: a.status === "paid" ? ("confirmed" as const) : a.status === "pending" ? ("pending" as const) : ("failed" as const),
+        invoiceId: detail.invoice.invoiceId,
+        amount: a.amount,
+        from: a.txFrom as Address,
+        txHash: a.txHash as `0x${string}`,
+        simulated: false,
+        createdAt: a.createdAt,
+        error: a.status === "failed" || a.status === "denied" ? (a.reason ?? undefined) : undefined,
+      })),
     reserveAvailable: "0", // unknown without the chain; see `chainVerified`
     chainVerified: detail.chain.verified,
   }

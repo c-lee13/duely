@@ -1,6 +1,7 @@
 import { GITHUB_DECLARATION_FILE_NAME, serializeGithubDeclaration } from "@/lib/ai/github-declaration"
 import type { GithubSubmissionResult } from "@/lib/ai/github-submission"
 import type { Address, OnchainInvoiceStatus } from "@/lib/frontend/domain"
+import { invoiceInScope, type DeploymentScope } from "@/lib/shared/deployment-scope"
 import {
   contentMatchesType,
   DOWNLOAD_URL_TTL_SECONDS,
@@ -46,9 +47,13 @@ export type EvidenceErrorCode =
   | "CHAIN_UNAVAILABLE"
   | "SUBMISSION_LIMIT"
   | "TOO_MANY_UPLOADS"
+<<<<<<< HEAD
   | "GITHUB_REJECTED"
   | "GITHUB_UNAVAILABLE"
   | "GITHUB_SUBMISSIONS_UNAVAILABLE"
+=======
+  | "WRONG_DEPLOYMENT"
+>>>>>>> origin/integration
 
 const STATUS: Record<EvidenceErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -68,9 +73,13 @@ const STATUS: Record<EvidenceErrorCode, number> = {
   CHAIN_UNAVAILABLE: 503,
   SUBMISSION_LIMIT: 409,
   TOO_MANY_UPLOADS: 429,
+<<<<<<< HEAD
   GITHUB_REJECTED: 422,
   GITHUB_UNAVAILABLE: 503,
   GITHUB_SUBMISSIONS_UNAVAILABLE: 503,
+=======
+  WRONG_DEPLOYMENT: 409,
+>>>>>>> origin/integration
 }
 
 export class EvidenceError extends Error {
@@ -178,6 +187,8 @@ export const noChainAdapter: ChainFundingVerifier = { verify: async () => ({ sta
 export type GithubValidator = (repositoryUrl: string, commitSha: string) => Promise<GithubSubmissionResult>
 
 export interface EvidenceDeps {
+  /** The one deployment this process serves; invoices of another deployment are refused. Required. */
+  scope: DeploymentScope
   db: EvidenceDb
   objects: EvidenceObjectStore
   /** Absent = GitHub submissions are not enabled in this deployment. */
@@ -218,6 +229,12 @@ async function loadPartyContext(deps: EvidenceDeps, userId: string, invoiceId: s
   const isClient = wallets.includes(invoice.client_address)
   const isFreelancer = wallets.includes(invoice.freelancer_address)
   if (!isClient && !isFreelancer) throw new EvidenceError("NOT_FOUND", "Invoice not found.")
+  if (!invoiceInScope(invoice, deps.scope)) {
+    throw new EvidenceError(
+      "WRONG_DEPLOYMENT",
+      `This invoice belongs to a different deployment than the one this server runs (${deps.scope.key.toUpperCase()}).`
+    )
+  }
   return { invoice, isClient, isFreelancer }
 }
 

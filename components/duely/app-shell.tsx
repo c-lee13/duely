@@ -31,9 +31,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBalances, useRepository, useSession } from "@/hooks/use-duely"
 import type { DemoRole } from "@/lib/frontend/domain"
+import { tokenNotice } from "@/lib/frontend/token"
 import type { DemoControls } from "@/lib/frontend/repository"
 import { Amount, AddressChip } from "./primitives"
 import { LiveAuthGate } from "./live-auth"
+import { WalletStatusBar } from "./wallet-status"
 import { useToast } from "./toast"
 
 export const ROLE_HOME: Record<DemoRole, string> = {
@@ -265,12 +267,12 @@ function LiveBanner() {
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-1.5 text-xs sm:px-6">
         <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
         <p className="min-w-0 flex-1">
-          <span className="font-semibold">Live data.</span>{" "}
+          <span className="font-semibold">Live.</span>{" "}
           <span className="hidden sm:inline">
-            Invoices, evidence and evaluations are stored in Supabase. Escrow, payments and balances aren&apos;t connected to the
-            blockchain yet, so nothing is paid and no figure here is a confirmed payment.
+            Invoices, evidence and evaluations are stored in Supabase; escrow, payments and balances are read from the blockchain.
+            A payment counts only once its transaction is confirmed on-chain.
           </span>
-          <span className="sm:hidden">Stored in Supabase · blockchain payments not connected yet.</span>
+          <span className="sm:hidden">Supabase + on-chain · paid only when confirmed.</span>
         </p>
         <button
           type="button"
@@ -363,6 +365,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     // Bottom padding reserves room for the fixed tab bar (mobile) so content and the footer are never covered.
     <div className="flex min-h-svh flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
       <DemoBanner onOpenControls={() => setControlsOpen(true)} />
+      {repo.mode === "api" && <WalletStatusBar />}
       <header className="sticky top-0 z-40 border-b bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur supports-backdrop-filter:bg-background/75">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6">
           <Logo />
@@ -397,7 +400,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {role && repo.demo ? (
               <RoleSwitcher current={role} />
             ) : role && repo.live ? (
-              <RoleSwitcher current={role} roles={["client", "freelancer"]} />
+              <RoleSwitcher current={role} roles={["client", "freelancer", "platform"]} />
             ) : repo.mode === "api" ? null : (
               <Skeleton className="h-9 w-28 md:h-8" />
             )}
@@ -410,7 +413,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <footer className="border-t">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:justify-between sm:px-6">
           <span>Duely · XRPL EVM hackathon MVP · escrow-backed early payment</span>
-          <span>DEMO tokens are test tokens, not RLUSD or real dollars.</span>
+          <span>{tokenNotice()}</span>
         </div>
       </footer>
       {role && <BottomNav role={role} pathname={pathname} />}

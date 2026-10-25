@@ -37,7 +37,8 @@ import {
   SimulatedTag,
   SubmissionStatusBadge,
 } from "@/components/duely/primitives"
-import { useAction, useInvoiceBundle, useRepository } from "@/hooks/use-duely"
+import { useAction, useInvoiceBundle, usePollWhile, useRepository } from "@/hooks/use-duely"
+import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import type { InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canClientApprove, canClientDispute, canFund, evaluationFor, settlementProjection } from "@/lib/frontend/eligibility"
 import { isGithubEvaluation } from "@/lib/frontend/github-evaluation"
@@ -57,18 +58,22 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
     )
   }
   if (!q.data) return <PageSkeleton />
-  return <DetailBody bundle={q.data} />
+  return <DetailBody bundle={q.data} reload={q.reload} />
 }
 
-function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
+function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void }) {
   const toast = useToast()
   const { invoice, submissions, evaluations, timeline, transactions, reserveAvailable } = bundle
   const live = useRepository().mode === "api"
   const [confirm, setConfirm] = React.useState<null | "approve" | "dispute">(null)
 
-  const fund = useAction((repo) => repo.fundInvoice(invoice.invoiceId))
-  const approve = useAction((repo) => repo.approveInvoice(invoice.invoiceId))
-  const dispute = useAction((repo) => repo.disputeInvoice(invoice.invoiceId))
+  const progress = useTxProgress()
+  const sim = live ? "" : " (simulated)"
+  const fund = useAction((repo) => repo.fundInvoice(invoice.invoiceId, progress.onProgress))
+  const approve = useAction((repo) => repo.approveInvoice(invoice.invoiceId, progress.onProgress))
+  const dispute = useAction((repo) => repo.disputeInvoice(invoice.invoiceId, progress.onProgress))
+  // A wallet transaction that is still unconfirmed is re-checked against the chain until it is final.
+  usePollWhile(live && transactions.some((t) => t.status === "pending"), reload, 5000)
 
   const latest = submissions[0]
   const latestEval = evaluationFor(latest, evaluations)
@@ -79,28 +84,34 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
   const failure = fund.error ?? approve.error ?? dispute.error
 
   async function onFund() {
+    progress.reset()
     const r = await fund.run()
-    if (r.ok) toast({ tone: "success", title: "Escrow funded (simulated)", description: `${formatToken(invoice.amount)} locked. No real tokens moved.` })
-    else toast({ tone: "error", title: "Funding failed", description: r.error })
+    if (r.ok) toast({ tone: "success", title: `Escrow funded${sim}`, description: live ? `${formatToken(invoice.amount)} locked in escrow, confirmed on-chain.` : `${formatToken(invoice.amount)} locked. No real tokens moved.` })
+    else toast({ tone: "error", title: "Funding not completed", description: r.error })
+    reload()
   }
   async function onApprove() {
+    progress.reset()
     const r = await approve.run()
     setConfirm(null)
+    reload()
     if (r.ok)
       toast({
         tone: "success",
-        title: "Invoice settled (simulated)",
+        title: `Invoice settled${sim}`,
         description: hasAdvance
           ? `${formatToken(proj.reserveCredit)} credited to the reserve, ${formatToken(proj.toFreelancer)} paid to the freelancer.`
           : `${formatToken(proj.toFreelancer)} paid to the freelancer.`,
       })
-    else toast({ tone: "error", title: "Approval failed", description: r.error })
+    else toast({ tone: "error", title: "Approval not completed", description: r.error })
   }
   async function onDispute() {
+    progress.reset()
     const r = await dispute.run()
     setConfirm(null)
-    if (r.ok) toast({ tone: "warning", title: "Dispute opened (simulated)", description: "Settlement is frozen. No refund or clawback happens automatically." })
-    else toast({ tone: "error", title: "Dispute failed", description: r.error })
+    reload()
+    if (r.ok) toast({ tone: "warning", title: `Dispute opened${sim}`, description: live ? "Settlement is frozen until the operator resolves it. An advance already paid is not clawed back." : "Settlement is frozen. No refund or clawback happens automatically." })
+    else toast({ tone: "error", title: "Dispute not completed", description: r.error })
   }
 
   return (
@@ -122,27 +133,12 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
         </Alert>
       )}
 
-      {/* Decision area. Live mode: funding, approval and disputes are on-chain actions that are not connected. */}
-      {live ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Your decision</CardTitle>
-            <CardDescription>On-chain actions aren&apos;t connected yet.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              Funding escrow, approving work and opening a dispute are blockchain transactions from your wallet. They need the deployed
-              contract, which isn&apos;t connected, so they&apos;re unavailable here and nothing is paid or settled.
-            </p>
-            <p>You can still review the criteria, the freelancer&apos;s evidence and any evaluation below.</p>
-          </CardContent>
-        </Card>
-      ) : (
+      {/* Decision area: simulated in mock mode; in live mode every button is a wallet transaction that shows as done only once confirmed. */}
       <Card className={invoice.onchainStatus === "Disputed" ? "ring-2 ring-destructive/40" : undefined}>
         <CardHeader>
           <CardTitle>Your decision</CardTitle>
           <CardDescription>
-            Financial status comes from the (simulated) contract. Evidence and the AI recommendation are off-chain and don&apos;t move money.
+            {live ? "Financial status is read from the contract. " : "Financial status comes from the (simulated) contract. "}Evidence and the AI recommendation are off-chain and don&apos;t move money.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -152,7 +148,7 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
                 Escrow isn&apos;t funded yet. The freelancer can&apos;t submit evidence until you lock <Amount value={invoice.amount} />.
               </p>
               <Button size="lg" onClick={onFund} disabled={busy}>
-                <Lock /> {fund.pending ? "Funding (simulated)…" : "Fund escrow (simulated)"}
+                <Lock /> {fund.pending ? (live ? "Waiting for wallet and confirmation…" : "Funding (simulated)…") : `Fund escrow${sim}`}
               </Button>
             </div>
           )}
@@ -175,7 +171,9 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
               <AlertTitle>Settlement is frozen</AlertTitle>
               <AlertDescription>
                 Escrow stays locked and the invoice can&apos;t be approved. {hasAdvance ? <>The <Amount value={invoice.advanceAmount} /> advance isn&apos;t clawed back; the platform bears that risk. </> : null}
-                No automatic refund or arbitration exists. Resolution is handled manually outside this demo.
+                {live
+                  ? "The platform operator now resolves it on-chain: either the freelancer is paid as normal, or the whole escrow is refunded to you. Either way the advance already paid is not clawed back."
+                  : "No automatic refund or arbitration exists. Resolution is handled manually outside this demo."}
               </AlertDescription>
             </Alert>
           )}
@@ -205,12 +203,13 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
           )}
           {busy && (
             <p className="text-sm text-muted-foreground" role="status">
-              Simulated transaction pending… This is shown as confirmed only after the simulated confirmation.
+              {live ? "Waiting for MetaMask and on-chain confirmation… Nothing here is final until each step shows as confirmed." : "Simulated transaction pending… This is shown as confirmed only after the simulated confirmation."}
             </p>
           )}
         </CardContent>
       </Card>
-      )}
+
+      {live && <TxProgressPanel steps={progress.steps} title="Wallet steps" />}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
@@ -221,7 +220,7 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
                   <FileText className="size-4" aria-hidden /> Latest submission
                 </CardTitle>
                 <CardDescription>
-                  {submissions.length} submission{submissions.length === 1 ? "" : "s"} · evidence is stored privately (simulated path)
+                  {submissions.length} submission{submissions.length === 1 ? "" : "s"} · evidence is stored privately{live ? "" : " (simulated path)"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
@@ -282,7 +281,7 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
         <section className="space-y-3">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Transactions</h2>
-            <SimulatedTag />
+            {!live && <SimulatedTag />}
           </div>
           <TransactionList transactions={transactions} />
         </section>
@@ -302,13 +301,13 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
                   Escrow will pay the full {formatToken(proj.toFreelancer)} to {invoice.freelancerName}. This can&apos;t be undone and ends dispute options.
                 </>
               )}{" "}
-              Simulated; no real tokens move.
+              {live ? "MetaMask will ask you to confirm one transaction." : "Simulated; no real tokens move."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={approve.pending}>Cancel</AlertDialogCancel>
             <Button onClick={onApprove} disabled={approve.pending}>
-              {approve.pending ? "Confirming…" : "Approve & settle"}
+              {approve.pending ? (live ? "Waiting for confirmation…" : "Confirming…") : "Approve & settle"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -321,13 +320,15 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
             <AlertDialogDescription>
               Settlement freezes and escrow stays locked.{" "}
               {hasAdvance ? `The ${formatToken(invoice.advanceAmount)} advance isn't clawed back. ` : ""}
-              There is no automatic refund or arbitration in this MVP; resolution is manual. Simulated.
+              {live
+                ? "The platform operator then resolves the dispute on-chain: the freelancer is paid, or you are refunded the whole escrow. MetaMask will ask you to confirm one transaction."
+                : "There is no automatic refund or arbitration in this MVP; resolution is manual. Simulated."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={dispute.pending}>Cancel</AlertDialogCancel>
             <Button variant="destructive" onClick={onDispute} disabled={dispute.pending}>
-              {dispute.pending ? "Confirming…" : "Open dispute"}
+              {dispute.pending ? (live ? "Waiting for confirmation…" : "Confirming…") : "Open dispute"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

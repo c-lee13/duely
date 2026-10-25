@@ -12,6 +12,13 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored / generated / build output: never lint these (project source stays fully linted).
+    "contracts/lib/**",
+    "contracts/out/**",
+    "contracts/cache/**",
+    "contracts/broadcast/**",
+    "coverage/**",
+    "lib/chain/generated/**",
   ]),
 ]);
 

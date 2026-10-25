@@ -14,7 +14,7 @@ Duely lets a client lock payment for freelance work, a freelancer submit evidenc
 
 - XRPL **EVM** testnet, Solidity/Foundry/OpenZeppelin; **not** native XRPL Escrow.
 - **One `InvoiceAdvance.sol` contract**, a simple ERC-20 demo token, and platform-funded reserve. **NO external LPs, ERC-4626 vault, lending protocol, yield distribution, or public depositors.**
-- Mock ERC-20 is explicitly labeled *demo token* unless the team confirms a suitable token on the target testnet. Never label a mock as actual RLUSD.
+- Two payment-token deployments exist on XRPL EVM testnet, each with its own immutable `InvoiceAdvance`, selected by `DUELY_DEPLOYMENT=dusd|rlusd` (default `dusd`): **dUSD** (mock, 6 decimals, labeled *demo token*) and **RLUSD** (the issuer's real testnet token, 18 decimals, live-tested end to end in A6.6.4b). Never label dUSD as RLUSD, and never label RLUSD a demo token. RLUSD is issuer-controlled (pause, clawback, upgrade); this is documented, not mitigated. Details: `docs/CHAIN_SDK_HANDOFF.md`, `docs/TRACK_B_A7_HANDOFF.md`.
 - Next.js App Router + TypeScript + shadcn/Base UI, wagmi/viem, Supabase Postgres/Storage, OpenAI structured evaluation, MetaMask.
 - No x402, LangGraph orchestration, Privy, Mastercard fiat integration, credit underwriting, or automated arbitration in MVP.
 - AI returns a recommendation; it does not possess a signing key or directly call contracts. A protected backend validates eligibility and an authorized signer submits the transaction.
@@ -59,15 +59,15 @@ These are **target locations, not instructions to overwrite or relocate existing
 
 ## 5. Locked MVP workflow and state boundaries
 
-1. Client connects wallet, creates an invoice with freelancer wallet, amount, description and explicit acceptance criteria. Full criteria live in Supabase; a deterministic criteria hash is committed on-chain.
+1. Client connects wallet, creates an invoice with freelancer wallet, amount, description and explicit acceptance criteria. Full criteria live in Supabase; a deterministic `metadataHash` (commits to the full agreement, including criteria) is committed on-chain.
 2. Client approves the ERC-20 spending allowance and calls `fundInvoice(invoiceId)` to lock the entire invoice amount in escrow.
 3. Team/platform separately calls `depositReserve(amount)` using platform-funded demo tokens.
 4. Freelancer connects the registered wallet and submits evidence; server stores private file and submission metadata in Supabase.
 5. Backend reads immutable criteria, retrieves evidence securely, calls OpenAI, and stores the **server-generated** structured result. Passing rule is an explicit server policy, not an untrusted client boolean.
-6. Freelancer explicitly requests the advance. Backend checks session-to-wallet binding, invoice ownership, latest eligible evaluation, funded/undisputed/unsettled chain state, no previous advance, and reserve availability. Authorized platform signer calls `approveAdvance(invoiceId)`.
-7. Contract pays the freelancer exactly `floor(amount * 90 / 100)` token base units from the reserve. Backend marks success only after a confirmed receipt/event.
-8. Client calls `approveWork(invoiceId)`. If an advance occurred, escrow **internally credits** the reserve by the advanced amount and transfers the remainder to freelancer. Without an advance, full escrow goes to freelancer.
-9. If client calls `disputeInvoice` before settlement, regular settlement is frozen. No automatic refund or reversal is implemented; dispute outcome requires a separately agreed manual resolution process.
+6. Freelancer explicitly requests the advance. Backend checks session-to-wallet binding, invoice ownership, latest eligible evaluation, funded/undisputed/unsettled chain state, no previous advance, and reserve availability. The `EVALUATOR_ROLE` platform signer calls `approveAdvance(invoiceId, evaluationHash)`.
+7. Contract pays the freelancer exactly `floor(amount * 9000 / 10000)` token base units from the reserve. Backend marks success only after a confirmed receipt/event.
+8. Client calls `approveCompletion(invoiceId)`. If an advance occurred, escrow **internally credits** the reserve by the advanced amount and transfers the remainder to freelancer. Without an advance, full escrow goes to freelancer.
+9. If client calls `raiseDispute` before settlement, regular advance/settlement is frozen. The operator then calls `resolveDispute(invoiceId, releaseToFreelancer)`: `true` settles normally; `false` refunds the full escrow to the client. A prior advance is never clawed back; it remains an operator reserve loss (`unrecoveredAdvance` in `DisputeResolved`). A client may `cancelInvoice` only while `Created`.
 
 **On-chain financial state** is authoritative. Off-chain `Submitted`/`Evaluated` are separate metadata, not on-chain statuses. Never infer financial finality from a database row or optimistic UI.
 
@@ -80,7 +80,7 @@ export type InvoiceId = string;     // uint256 in decimal string form
 export type TokenAmount = string;   // ERC-20 base units; NEVER floating point
 
 export type OnchainInvoiceStatus =
-  | 'Created' | 'Funded' | 'Advanced' | 'Disputed' | 'Settled';
+  | 'Created' | 'Funded' | 'Advanced' | 'Settled' | 'Disputed' | 'Cancelled'; // enum order matches Solidity
 export type SubmissionStatus = 'NotSubmitted' | 'Submitted' | 'Evaluated';
 
 export interface InvoiceRecord {
@@ -89,7 +89,7 @@ export interface InvoiceRecord {
   freelancer: Address;
   amount: TokenAmount;
   advanceAmount: TokenAmount; // actual amount advanced, 0 before advance
-  criteriaHash: Bytes32;
+  metadataHash: Bytes32; // commits to the full invoice agreement incl. criteria
   onchainStatus: OnchainInvoiceStatus;
   submissionStatus: SubmissionStatus;
   description?: string;
@@ -112,28 +112,33 @@ export interface EvaluationResult {
 
 **Hashing rule:** define one canonical criteria representation (e.g., a versioned ordered array of `{id, text}` entries, normalized UTF-8) and one shared Keccak-256 encoding algorithm. Frontend/backend/contract integration must produce the same bytes32; do not hash unstable arbitrary JSON. Criteria must not be edited after the invoice is created/funded; changes require a new invoice in MVP.
 
-## 7. Solidity interface — proposed freeze (Track A confirms before parallel integration)
+## 7. Solidity interface (authoritative source: `docs/CONTRACT_SPEC.md` v1.1; this section summarizes it)
 
 ```solidity
-function createInvoice(address freelancer, uint256 amount, bytes32 criteriaHash)
+function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash)
     external returns (uint256 invoiceId);
-function fundInvoice(uint256 invoiceId) external;
-function depositReserve(uint256 amount) external;
-function approveAdvance(uint256 invoiceId) external; // platform role only
-function approveWork(uint256 invoiceId) external;    // client only
-function disputeInvoice(uint256 invoiceId) external; // client only; not settled
-function getInvoice(uint256 invoiceId) external view returns (/* finalized struct */);
+function cancelInvoice(uint256 invoiceId) external;   // client only; Created only
+function fundInvoice(uint256 invoiceId) external;     // client only
+function depositReserve(uint256 amount) external;     // OPERATOR_ROLE
+function withdrawReserve(uint256 amount) external;    // OPERATOR_ROLE
+function approveAdvance(uint256 invoiceId, bytes32 evaluationHash) external; // EVALUATOR_ROLE
+function approveCompletion(uint256 invoiceId) external; // client only
+function raiseDispute(uint256 invoiceId) external;      // client only; Funded/Advanced
+function resolveDispute(uint256 invoiceId, bool releaseToFreelancer) external; // OPERATOR_ROLE
+function getInvoice(uint256 invoiceId) external view returns (Invoice memory);
+function availableReserve() external view returns (uint256);
 ```
+Roles: `DEFAULT_ADMIN_ROLE`, `OPERATOR_ROLE` (reserve, dispute resolution), `EVALUATOR_ROLE` (backend signer, advances only). Enum: `Created, Funded, Advanced, Settled, Disputed, Cancelled`. Token: one immutable ERC-20 per deployment: dUSD (6-decimal demo token) or RLUSD (18 decimals); the contract is decimals-agnostic.
 
-**Before coding consumers, freeze:** invoice struct/enum and getter tuple; event argument names/types/indexing; ERC-20 token address (single token, immutable for MVP); signer/role initialization; chain ID; and exact dispute conditions. Contract owner exports the *compiled* ABI to `lib/chain/abi.ts` and publishes deployed address/chain config. Do not hand-maintain an ABI that can diverge from compiled code.
+**Before coding consumers, freeze:** invoice struct/enum and getter tuple; event argument names/types/indexing; ERC-20 token address (single token, immutable for MVP); signer/role initialization; chain ID; and exact dispute conditions. Contract owner exports the *compiled* ABI to `lib/chain/generated/` and publishes deployed address/chain config. Do not hand-maintain an ABI that can diverge from compiled code.
 
-Expected events: `InvoiceCreated`, `InvoiceFunded`, `AdvancePaid`, `InvoiceDisputed`, `InvoiceSettled` (finalize fields jointly). Contract's `Advanced` state must still allow client approval/dispute. A settled invoice is terminal.
+Events (exact signatures in the spec §6): `InvoiceCreated`, `InvoiceFunded`, `InvoiceCancelled`, `ReserveDeposited`, `ReserveWithdrawn`, `AdvancePaid`, `InvoiceSettled`, `InvoiceDisputed`, `DisputeResolved`. Contract's `Advanced` state must still allow client approval/dispute. A settled invoice is terminal.
 
 ### Contract invariants (mandatory Foundry tests)
 
 - Client escrow is segregated in accounting and cannot finance advances.
 - Reserve can never be overdrawn; no double advances or double settlements.
-- Client can fund only its invoice; only authorized platform role advances; only the recorded client approves/disputes.
+- Client can fund only its invoice; only `EVALUATOR_ROLE` advances; only the recorded client approves/disputes.
 - Advance is 90% in base units with floor rounding; settlement repays **actual** advance and pays remaining escrow.
 - Settlement without advance pays the full invoice to freelancer.
 - Disputed invoice cannot use ordinary settlement; advance cannot be triggered after dispute.
@@ -146,7 +151,7 @@ All mutations require authenticated sessions, Zod input validation, verified wal
 
 | Endpoint | Input | Output / guarantee |
 |---|---|---|
-| `POST /api/invoices` | `{ invoiceId, txHash, description, criteria }` | Verify chain receipt, creator, and criteria hash; persist metadata; return `InvoiceRecord` |
+| `POST /api/invoices` | `{ invoiceId, txHash, description, criteria }` | Verify chain receipt, creator, and `metadataHash`; persist metadata; return `InvoiceRecord` |
 | `GET /api/invoices/:id` | URL `invoiceId` | Return authorized invoice metadata + submissions/evaluations + verified chain snapshot |
 | `POST /api/submissions` | `{ invoiceId, storagePath }` after authorized upload | Verify freelancer, file ownership, invoice eligibility; return `{ submissionId }` |
 | `POST /api/evaluate` | `{ submissionId }` | Server retrieves immutable criteria and file; stores evaluation; returns `EvaluationResult` |
@@ -170,7 +175,7 @@ Use one documented JSON error shape: `{ error: { code: string, message: string }
 - Use server-only modules for secrets. Do not commit `.env`, `.env.local`, wallets, keys, or real user data. Commit `.env.example` with **names only**.
 - Supabase Storage should be private; verify access via auth/RLS and issue short-lived signed URLs as needed.
 - Use contract reads and receipts/events for balances, invoice status and transaction finality; Supabase may cache indexed data.
-- Demo tokens are not real dollars; all UI copy and demos must make that explicit.
+- Demo tokens (dUSD) are not real dollars; all UI copy and demos must make that explicit. Read symbol, decimals and `isDemoToken` from `paymentTokenInfo`; never hard-code 6 decimals or the string "dUSD".
 - Before real funds or external LPs: separate security, economic, legal and audit work is required. None of that is claimed by this MVP.
 
 ## 10. Parallel development protocol

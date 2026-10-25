@@ -24,17 +24,22 @@ import type {
   TransactionRecord,
 } from "@/lib/frontend/domain"
 import { shortHash } from "@/lib/frontend/criteria-digest"
-import { advanceFor, formatToken, isZero, sub } from "@/lib/frontend/token"
+import { advanceFor, formatToken, isZero, sub, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { tryExplorerTxUrl } from "@/lib/chain/config"
 import { useSession } from "@/hooks/use-duely"
 import { AddressChip, Amount, formatDate, OnchainStatusBadge, Pill, SimulatedTag, TxStatusBadge } from "./primitives"
 
 const TX_LABEL: Record<TransactionRecord["action"], string> = {
+  approve: "Approve token allowance",
   createInvoice: "Create invoice",
   fundInvoice: "Fund escrow",
   depositReserve: "Deposit to reserve",
   approveAdvance: "Pay 90% advance",
-  approveWork: "Approve & settle",
-  disputeInvoice: "Open dispute",
+  approveCompletion: "Approve & settle",
+  raiseDispute: "Open dispute",
+  cancelInvoice: "Cancel invoice",
+  withdrawReserve: "Withdraw from reserve",
+  resolveDispute: "Resolve dispute",
 }
 
 export function CriteriaList({ invoice }: { invoice: InvoiceDetail }) {
@@ -111,8 +116,8 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
     ) : (
       <>With no advance, escrow pays the full <Amount value={invoice.amount} /> to the freelancer.</>
     ),
-    tone: status === "Settled" ? "done" : pendingOf("approveWork") ? "pending" : status === "Disputed" ? "bad" : "todo",
-    badge: status === "Settled" ? "Settled" : pendingOf("approveWork") ? "Pending" : status === "Disputed" ? "Frozen" : "Awaiting client",
+    tone: status === "Settled" ? "done" : pendingOf("approveCompletion") ? "pending" : status === "Disputed" ? "bad" : "todo",
+    badge: status === "Settled" ? "Settled" : pendingOf("approveCompletion") ? "Pending" : status === "Disputed" ? "Frozen" : "Awaiting client",
   })
 
   const TONE = { done: "success", pending: "warning", todo: "neutral", skipped: "neutral", bad: "danger" } as const
@@ -120,7 +125,7 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
     <Card>
       <CardHeader>
         <CardTitle>Payment breakdown</CardTitle>
-        <CardDescription>Simulated demo tokens. Steps show as done only after a confirmed transaction.</CardDescription>
+        <CardDescription>{tokenDisplay().simulated ? "Simulated demo tokens. " : ""}Steps show as done only after a confirmed transaction.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <ol className="space-y-3">
@@ -141,8 +146,10 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
           {status === "Disputed" ? (
             <>
               A dispute freezes ordinary settlement and escrow stays locked.{" "}
-              {hasAdvance ? "The advance already paid is not automatically reversed; the platform carries that risk until manual resolution. " : ""}
-              No automatic refund or arbitration exists.
+              {hasAdvance ? "The advance already paid is never clawed back; the platform carries that risk. " : ""}
+              {tokenDisplay().simulated
+                ? "No automatic refund or arbitration exists in this demo."
+                : "The platform operator resolves it on-chain: the freelancer is paid as normal, or the client is refunded the whole escrow."}
             </>
           ) : status === "Settled" ? (
             "This invoice is settled and final."
@@ -164,12 +171,12 @@ function UnverifiedMoneyNotice({ title, invoice }: { title: string; invoice: Inv
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>Not connected to the blockchain yet.</CardDescription>
+        <CardDescription>The blockchain couldn&apos;t be read just now.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p className="rounded-lg bg-muted/60 p-3 text-muted-foreground">
-          Escrow, advances and payouts are read from the contract, which isn&apos;t connected. No payment is shown because none can be
-          verified. The status badge above comes from a saved record, not the chain.
+          Escrow, advances and payouts are read from the contract, and that read failed or this record was never on-chain. No payment is
+          shown because none can be verified. The status badge above comes from a saved record, not the chain.
         </p>
         <dl className="grid grid-cols-2 gap-3">
           <div>
@@ -210,6 +217,9 @@ export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: Invoice
         ? `Settlement is frozen. The ${formatToken(invoice.advanceAmount)} advance is not clawed back and escrow stays locked; the platform carries that risk until manual resolution.`
         : "Settlement is frozen and escrow stays locked until manual resolution. Nothing is refunded automatically."
       break
+    case "Cancelled":
+      explanation = "The client cancelled this invoice before funding it. Nothing was locked and nothing was paid."
+      break
     case "Settled":
       explanation = hasAdvance
         ? `Escrow credited ${formatToken(invoice.reserveCredited)} to the reserve and paid ${formatToken(remainder)} to the freelancer.`
@@ -220,7 +230,7 @@ export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: Invoice
     <Card>
       <CardHeader>
         <CardTitle>Where the money is</CardTitle>
-        <CardDescription>Escrow and the platform reserve are separate balances. Simulated demo tokens.</CardDescription>
+        <CardDescription>Escrow and the platform reserve are separate balances. {tokenDisplay().simulated ? "Simulated demo tokens." : tokenNotice()}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
@@ -434,12 +444,20 @@ export function TransactionList({
               )}
             </p>
             <p className="text-xs text-muted-foreground">
-              {formatDate(t.createdAt, true)} · <span className="font-mono">{t.id}</span>
+              {formatDate(t.createdAt, true)} ·{" "}
+              {t.txHash && !t.simulated && tryExplorerTxUrl(t.txHash) ? (
+                <a className="font-mono text-primary underline" href={tryExplorerTxUrl(t.txHash)!} target="_blank" rel="noreferrer" title={t.txHash}>
+                  {shortHash(t.txHash)}
+                </a>
+              ) : (
+                <span className="font-mono">{t.id}</span>
+              )}
             </p>
+            {t.status === "pending" && !t.simulated && <p className="mt-1 text-xs text-muted-foreground">Sent, not final yet. Nothing is paid or settled until it is confirmed.</p>}
             {t.error && <p className="mt-1 text-xs text-destructive">{t.error}</p>}
           </div>
           {t.amount && <Amount value={t.amount} />}
-          <SimulatedTag>Simulated · no on-chain hash</SimulatedTag>
+          {(t.simulated || !t.txHash) && <SimulatedTag>Simulated · no on-chain hash</SimulatedTag>}
           <TxStatusBadge status={t.status} />
         </li>
       ))}
@@ -559,7 +577,7 @@ export function InvoiceHeaderCard({
             </dd>
           </div>
         </dl>
-        <p className="text-xs text-muted-foreground">Simulated demo tokens · not real money.</p>
+        <p className="text-xs text-muted-foreground">{tokenNotice()}</p>
       </div>
     </section>
   )

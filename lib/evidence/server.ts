@@ -1,7 +1,13 @@
 import "server-only"
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Address } from "@/lib/frontend/domain"
+<<<<<<< HEAD
 import { validateGithubSubmission } from "@/lib/ai/github-submission"
+=======
+import { activeDeploymentScope } from "@/lib/backend/scope"
+import { createChainAdapter, createChainFundingVerifier } from "@/lib/backend/chain-adapter"
+import type { DeploymentScope } from "@/lib/shared/deployment-scope"
+>>>>>>> origin/integration
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { EVIDENCE_BUCKET } from "@/lib/supabase/env"
@@ -9,7 +15,6 @@ import type { Database } from "@/lib/supabase/database.types"
 import {
   EvidenceError,
   mapSubmissionInsertError,
-  noChainAdapter,
   type ChainFundingVerifier,
   type EvidenceDb,
   type EvidenceDeps,
@@ -176,18 +181,27 @@ export function createSupabaseObjectStore(admin: Admin): EvidenceObjectStore {
  * "unavailable" and the service falls back to the cached status unless EVIDENCE_REQUIRE_CHAIN_VERIFICATION=true.
  * Replace with a viem-backed reader of the contract's invoice status when the adapter exists.
  */
-export function getChainVerifier(): ChainFundingVerifier {
-  return noChainAdapter
+export function getChainVerifier(scope: DeploymentScope = activeDeploymentScope()): ChainFundingVerifier {
+  return createChainFundingVerifier(createChainAdapter({ scope }))
 }
 
 export function getEvidenceDeps(): EvidenceDeps {
   const admin = createSupabaseAdminClient()
+  const scope = activeDeploymentScope()
   return {
     db: createSupabaseEvidenceDb(admin),
     objects: createSupabaseObjectStore(admin),
+<<<<<<< HEAD
     chain: getChainVerifier(),
     requireChainVerification: process.env.EVIDENCE_REQUIRE_CHAIN_VERIFICATION === "true",
     github: githubValidator(),
+=======
+    scope,
+    chain: getChainVerifier(scope),
+    // With a real chain reader, funding must be PROVEN on-chain: the cached database status is no longer an acceptable
+    // fallback. Only an explicit EVIDENCE_REQUIRE_CHAIN_VERIFICATION=false (dev fixtures that were never on-chain) turns it off.
+    requireChainVerification: process.env.EVIDENCE_REQUIRE_CHAIN_VERIFICATION !== "false",
+>>>>>>> origin/integration
   }
 }
 

@@ -48,7 +48,7 @@ unique per deployment. Users are identified through `user_wallets.address` ↔ `
 - **submissions**: freelancer user + address, private `storage_path`, file name/size/type, note. Optional GitHub code submission (migration 9): `repository_url` (canonical `https://github.com/owner/repo`) + `commit_sha` (full lower-case 40-hex), both or neither, immutable like the rest of the row.
 - **evaluations**: submission, invoice, `criteria_hash`/`criteria_version` evaluated against, `model`, `prompt_version`, `state`, `score` 0..100, `passed`, `criteria_results` (ordered JSON array), `summary` (rationale), `pass_rule`, `simulated`, timestamps.
 - **advance_requests**: invoice, requester user/address, evaluation used, `status` (pending/paid/failed/denied), `amount`, `reason`, `idempotency_key`, `transaction_id`.
-- **transactions**: invoice, `chain_id`, `action` (createInvoice/fundInvoice/depositReserve/approveAdvance/approveWork/disputeInvoice), `status`, `tx_hash`, block number/hash/timestamp, log index, decoded `receipt`, `simulated`.
+- **transactions**: invoice, `chain_id`, `action` (the contract function names: createInvoice/cancelInvoice/fundInvoice/depositReserve/withdrawReserve/approveAdvance/approveCompletion/raiseDispute/resolveDispute; legacy approveWork/disputeInvoice stay valid, migration 9), `status`, `tx_hash`, block number/hash/timestamp, log index, decoded `receipt`, `simulated`.
 - **user_wallets**: user ↔ address, with `verified_at`, `verification_method`, `verification_nonce`.
 - **wallet_challenges**: single-use nonce, address, message, expiry, `used_at`.
 

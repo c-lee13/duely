@@ -13,13 +13,19 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 type Address = `0x${string}`
 type Bytes32 = `0x${string}`
 
-export type OnchainStatusDb = "Created" | "Funded" | "Advanced" | "Disputed" | "Settled"
+export type OnchainStatusDb = "Created" | "Funded" | "Advanced" | "Disputed" | "Settled" | "Cancelled"
 export type TxStatusDb = "pending" | "confirmed" | "failed"
 export type TxActionDb =
   | "createInvoice"
+  | "cancelInvoice"
   | "fundInvoice"
   | "depositReserve"
+  | "withdrawReserve"
   | "approveAdvance"
+  | "approveCompletion"
+  | "raiseDispute"
+  | "resolveDispute"
+  // legacy names from the first draft; rows may still carry them (migration 9 keeps them valid)
   | "approveWork"
   | "disputeInvoice"
 export type EvaluationStateDb = "running" | "completed" | "error"

@@ -16,7 +16,10 @@ export function createSupabaseAdminClient() {
   const pub = requirePublicSupabaseEnv()
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceKey || /your[-_]|<.*>|changeme/i.test(serviceKey)) {
-    throw new SupabaseConfigError(["SUPABASE_SERVICE_ROLE_KEY is not set (server environment only)."])
+    throw new SupabaseConfigError([
+      `SUPABASE_SERVICE_ROLE_KEY is ${serviceKey === undefined ? "not set" : serviceKey.trim() === "" ? "set but EMPTY" : "still a placeholder"} (server environment only). ` +
+        "If it is in .env.local but this error persists, the process that started the server has its own (empty or stale) value, which overrides the .env files: unset it in that terminal and restart `npm run dev`.",
+    ])
   }
   return createClient<Database>(pub.url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

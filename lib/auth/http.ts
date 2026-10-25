@@ -14,7 +14,11 @@ export function toErrorResponse(e: unknown) {
   if (e instanceof EvidenceError) return errorResponse(e.status, e.code, e.message)
   if (e instanceof ApiError) return errorResponse(e.status, e.code, e.message)
   if (e instanceof SupabaseConfigError) {
-    return errorResponse(503, "SUPABASE_NOT_CONFIGURED", "This feature is unavailable: Supabase is not fully configured on the server.")
+    // The problems name variables and hints only, never values, so they are safe to log. They are also added to the response
+    // outside production so a developer can see WHICH variable is wrong instead of this one generic sentence.
+    console.error("supabase config problems:", e.problems.join(" | "))
+    const detail = process.env.NODE_ENV === "production" ? "" : ` Details (development only): ${e.problems.join(" ")}`
+    return errorResponse(503, "SUPABASE_NOT_CONFIGURED", `This feature is unavailable: Supabase is not fully configured on the server.${detail}`)
   }
   // Name and database error code only: messages can carry evidence content, values or connection details.
   console.error("api error:", e instanceof Error ? e.name : typeof e, (e as { code?: string } | null)?.code ?? "")

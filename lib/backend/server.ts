@@ -7,11 +7,13 @@ import { createSupabaseObjectStore, getSessionUserId } from "@/lib/evidence/serv
 import { mapAdvanceInsertError, mapEvaluationInsertError } from "./db-errors"
 import { createGeminiEvaluatorFromEnv } from "@/lib/ai/evaluation-service"
 import { demoEvaluator, resolveEvaluatorMode } from "./demo-evaluator"
+import { activeDeploymentScope } from "./scope"
+import { createEvaluatorSignerFromEnv } from "./advance-signer"
+import { createChainAdapter } from "./chain-adapter"
+import type { DeploymentScope } from "@/lib/shared/deployment-scope"
 import type { HandlerContext } from "./handlers"
 import {
   disabledEvaluator,
-  unavailableChainAdapter,
-  unavailableSigner,
   type AdvanceRequestData,
   type AdvanceSigner,
   type BackendDb,
@@ -65,10 +67,13 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
   async function withTxHash(requests: AdvanceRequestData[]): Promise<AdvanceRequestData[]> {
     const ids = requests.map((r) => r.transaction_id).filter((x): x is string => !!x)
     if (ids.length === 0) return requests.map((r) => ({ ...r, tx_hash: null }))
-    const { data, error } = await admin.from("transactions").select("id, tx_hash").in("id", ids)
+    const { data, error } = await admin.from("transactions").select("id, tx_hash, from_address").in("id", ids)
     if (error) fail(error)
-    const byId = new Map((data ?? []).map((t) => [t.id, t.tx_hash as Bytes32 | null]))
-    return requests.map((r) => ({ ...r, tx_hash: r.transaction_id ? (byId.get(r.transaction_id) ?? null) : null }))
+    const byId = new Map((data ?? []).map((t) => [t.id, t]))
+    return requests.map((r) => {
+      const t = r.transaction_id ? byId.get(r.transaction_id) : undefined
+      return { ...r, tx_hash: (t?.tx_hash as Bytes32 | null | undefined) ?? null, tx_from: (t?.from_address as Address | null | undefined) ?? null }
+    })
   }
 
   return {
@@ -91,6 +96,17 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
         .select(INVOICE_COLS)
         .or(`client_address.in.(${list}),freelancer_address.in.(${list})`)
         .order("created_at", { ascending: false })
+      if (error) fail(error)
+      return rows<InvoiceData>(data)
+    },
+    async listInvoicesInScope(scope, limit) {
+      const { data, error } = await admin
+        .from("invoices")
+        .select(INVOICE_COLS)
+        .eq("chain_id", scope.chainId)
+        .eq("contract_address", scope.contractAddress.toLowerCase() as Address)
+        .order("created_at", { ascending: false })
+        .limit(limit)
       if (error) fail(error)
       return rows<InvoiceData>(data)
     },
@@ -221,6 +237,62 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
       const { error } = await admin.from("advance_requests").update({ status: "failed", reason }).eq("id", id).eq("status", "pending")
       if (error) fail(error)
     },
+    async getAdvanceRequest(id) {
+      const { data, error } = await admin.from("advance_requests").select(ADVANCE_COLS).eq("id", id).maybeSingle()
+      if (error) fail(error)
+      return data ? (await withTxHash([data as unknown as AdvanceRequestData]))[0] : null
+    },
+    async listPendingAdvances(invoiceId) {
+      const { data, error } = await admin.from("advance_requests").select(ADVANCE_COLS).eq("invoice_uuid", invoiceId).eq("status", "pending")
+      if (error) fail(error)
+      return withTxHash(rows<AdvanceRequestData>(data))
+    },
+    async recordAdvanceConfirmed(a) {
+      // Three conditional steps (PostgREST has no multi-statement transaction); each is a no-op when already applied, so a crash
+      // between them is repaired by the next reconcile. Order matters: the proof (transaction) first, the claim (paid) second.
+      const now = new Date().toISOString()
+      const tx = await admin
+        .from("transactions")
+        .update({ status: "confirmed", block_number: Number(a.blockNumber), block_hash: a.blockHash, log_index: a.logIndex, receipt: a.receipt, confirmed_at: now, error: null })
+        .eq("id", a.transactionId)
+        .eq("status", "pending")
+      if (tx.error) fail(tx.error)
+      const req = await admin.from("advance_requests").update({ status: "paid" }).eq("id", a.requestId).eq("status", "pending")
+      if (req.error) fail(req.error)
+      if (a.cache) {
+        const inv = await admin
+          .from("invoices")
+          .update({ onchain_status: a.cache.status, advance_amount: a.advanceAmount, chain_synced_at: now, chain_synced_block: Number(a.cache.blockNumber) })
+          .eq("id", a.invoiceId)
+        if (inv.error) fail(inv.error)
+      }
+      const { data, error } = await admin.from("advance_requests").select(ADVANCE_COLS).eq("id", a.requestId).single()
+      if (error) fail(error)
+      return (await withTxHash([data as unknown as AdvanceRequestData]))[0]
+    },
+    async recordAdvanceFailed(a) {
+      if (a.transactionId) {
+        const tx = await admin.from("transactions").update({ status: "failed", error: a.reason.slice(0, 500) }).eq("id", a.transactionId).eq("status", "pending")
+        if (tx.error) fail(tx.error)
+      }
+      const { error } = await admin.from("advance_requests").update({ status: "failed", reason: a.reason.slice(0, 500) }).eq("id", a.requestId).eq("status", "pending")
+      if (error) fail(error)
+    },
+    async noteAdvanceReview(requestId, reason) {
+      const { error } = await admin.from("advance_requests").update({ reason: reason.slice(0, 500) }).eq("id", requestId).eq("status", "pending")
+      if (error) fail(error)
+    },
+    async attachRecoveredTransaction(a) {
+      const { data: tx, error: txError } = await admin
+        .from("transactions")
+        .insert({ invoice_uuid: a.invoiceId, chain_id: a.chainId, action: "approveAdvance", status: "pending", from_address: a.from, amount: a.amount, tx_hash: a.txHash })
+        .select("id")
+        .single()
+      if (txError) fail(txError)
+      const { data, error } = await admin.from("advance_requests").update({ transaction_id: tx!.id }).eq("id", a.requestId).select(ADVANCE_COLS).single()
+      if (error) fail(error)
+      return (await withTxHash([data as unknown as AdvanceRequestData]))[0]
+    },
     async registerInvoice(a) {
       const { data, error } = await admin.rpc("register_invoice", {
         p_chain_id: a.chainId,
@@ -256,13 +328,13 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
  * this is the "unavailable" adapter: invoice registration and advances answer 503 INTEGRATION_UNAVAILABLE instead of
  * pretending. Replace with a viem-backed reader of the deployed contract once those artifacts exist.
  */
-export function getChainAdapter(): ChainAdapter {
-  return unavailableChainAdapter
+export function getChainAdapter(scope: DeploymentScope = activeDeploymentScope()): ChainAdapter {
+  return createChainAdapter({ scope })
 }
 
 /** Protected signer slot. Same rule: no signer integration yet, so advances cannot be broadcast. */
-export function getAdvanceSigner(): AdvanceSigner {
-  return unavailableSigner
+export function getAdvanceSigner(scope: DeploymentScope = activeDeploymentScope()): AdvanceSigner {
+  return createEvaluatorSignerFromEnv(scope)
 }
 
 /** DUELY_EVALUATOR_MODE: "gemini" = the real evaluator, "demo" = deterministic and simulated (never in production), otherwise off. */
@@ -274,11 +346,15 @@ export function getEvaluator(): Evaluator {
 
 export function getBackendDeps(): BackendDeps {
   const admin = createSupabaseAdminClient()
+  const scope = activeDeploymentScope()
   return {
+    scope,
+    // POST /api/advances waits (bounded) for the receipt so a normal confirmation is reported as paid in the same response.
+    confirmWaitMs: 15_000,
     db: createSupabaseBackendDb(admin),
     objects: createSupabaseObjectStore(admin),
-    chain: getChainAdapter(),
-    signer: getAdvanceSigner(),
+    chain: getChainAdapter(scope),
+    signer: getAdvanceSigner(scope),
     evaluator: getEvaluator(),
   }
 }

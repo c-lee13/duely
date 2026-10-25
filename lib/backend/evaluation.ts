@@ -46,7 +46,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
 
   const submission = await deps.db.getSubmission(input.submissionId)
   if (!submission) throw new ApiError("NOT_FOUND", "Submission not found.")
-  const { invoice, isFreelancer } = await loadInvoiceAsParty(deps.db, userId, submission.invoice_uuid)
+  const { invoice, isFreelancer } = await loadInvoiceAsParty(deps.db, userId, submission.invoice_uuid, deps.scope)
   if (!isFreelancer) throw new ApiError("FORBIDDEN", "Only the freelancer who made this submission can request its evaluation.")
   if (!wallets.includes(submission.freelancer_address)) throw new ApiError("FORBIDDEN", "This submission was made by a different wallet.")
 

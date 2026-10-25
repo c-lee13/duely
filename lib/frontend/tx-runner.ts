@@ -8,7 +8,7 @@ import {
   type TransactionStatus,
   type WriteContext,
 } from "@/lib/chain"
-import type { Address, Bytes32, TxAction } from "./domain"
+import type { Address, Bytes32, UiTxAction } from "./domain"
 import { DomainError, type DomainErrorCode } from "./errors"
 import type { TxLog } from "./tx-log"
 
@@ -65,7 +65,7 @@ let attempt = 0
 
 export interface RunTransactionInput {
   label: string
-  action: TxAction | "approve"
+  action: UiTxAction
   from: Address
   invoiceId?: string
   ctx: WriteContext

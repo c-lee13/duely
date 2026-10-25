@@ -15,7 +15,9 @@ import { MAX_UINT256 } from "./amounts"
 import { getPublicClient, type ChainReader } from "./client"
 import { contractAddresses, type HexAddress } from "./config"
 import { ChainReadError, toChainReadError } from "./errors"
+import { getActiveDeployment } from "./deployments"
 import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
+import { invoiceAdvanceV2Abi } from "./generated/invoiceAdvanceV2Abi"
 import { tokenPauseAbi } from "./token-pause"
 
 /**
@@ -58,6 +60,8 @@ export interface InvoiceDetails {
   amount: bigint
   /** Base units; 0 until an advance is paid, then stays recorded. */
   advanceAmount: bigint
+  /** v2 only: the fee fixed when the advance was funded (base units). Absent on v1. */
+  advanceFee?: bigint
   metadataHash: Hex
   /** Zero hash until an advance is paid. */
   evaluationHash: Hex
@@ -170,6 +174,30 @@ export async function getInvoice(
   opts?: ReadOptions
 ): Promise<InvoiceDetails> {
   const id = parseInvoiceId(invoiceId)
+  // V2's Invoice struct has 8 fields (adds advanceFee), so it must be decoded with its own ABI.
+  if (getActiveDeployment().protocol === "v2") {
+    const v2 = await guarded(`getInvoice(${id})`, () =>
+      readerOf(opts).readContract({
+        address: contractAddresses.invoiceAdvance,
+        abi: invoiceAdvanceV2Abi,
+        functionName: "getInvoice",
+        args: [id],
+        blockNumber: opts?.blockNumber,
+      })
+    )
+    return {
+      invoiceId: id,
+      client: v2.client,
+      freelancer: v2.freelancer,
+      amount: v2.amount,
+      advanceAmount: v2.advanceAmount,
+      advanceFee: v2.advanceFee,
+      metadataHash: v2.metadataHash,
+      evaluationHash: v2.evaluationHash,
+      status: v2.status,
+      statusName: statusName(v2.status),
+    }
+  }
   const invoice = await guarded(`getInvoice(${id})`, () =>
     readerOf(opts).readContract({
       address: contractAddresses.invoiceAdvance,

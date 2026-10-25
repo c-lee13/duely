@@ -76,3 +76,39 @@ export {
   deployments as generatedDeployments,
 } from "./generated"
 export * from "./deployments"
+
+// v2 protocol: DuelyVault LP operations, pull-payment claims, quotes and event decoding.
+export {
+  activeProtocol,
+  duelyVaultAbi,
+  escrowAbi,
+  invoiceAdvanceV2Abi,
+  isV2,
+  vaultAddress,
+  vaultInfo,
+} from "./protocol"
+export {
+  approveVaultAllowance,
+  claimProceeds,
+  decodeV2Events,
+  depositToVault,
+  getClaimable,
+  getEscrowTotals,
+  getLpPosition,
+  getVaultAdvance,
+  getVaultSnapshot,
+  previewDeposit,
+  quoteAdvance,
+  redeemFromVault,
+  withdrawFromVault,
+} from "./vault"
+export type {
+  AdvanceQuote,
+  DecodedV2Event,
+  EscrowTotals,
+  LpPosition,
+  V2ActivityEvent,
+  VaultAdvanceRecord,
+  VaultSnapshot,
+} from "./vault"
+export { V2_ONLY_FUNCTIONS } from "./expected"

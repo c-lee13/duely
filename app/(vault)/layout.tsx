@@ -1,7 +1,7 @@
 import Link from "next/link"
 
 /**
- * Standalone layout for the Vault preview. It deliberately shares nothing with the client/freelancer app shell (no role switcher,
+ * Standalone layout for the Vault page (live on the v2 deployment, a placeholder preview otherwise). It deliberately shares nothing with the client/freelancer app shell (no role switcher,
  * wallet sign-in gate, navigation or data provider state), so changes here cannot affect those pages and vice versa.
  */
 export default function VaultLayout({ children }: { children: React.ReactNode }) {
@@ -22,7 +22,7 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
       </header>
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 md:py-8">{children}</main>
       <footer className="border-t">
-        <div className="mx-auto max-w-6xl px-4 py-4 text-xs text-muted-foreground sm:px-6">Duely V2 vault · design preview · no live data</div>
+        <div className="mx-auto max-w-6xl px-4 py-4 text-xs text-muted-foreground sm:px-6">Duely vault · XRPL EVM testnet · figures appear only when the V2 deployment is selected</div>
       </footer>
     </div>
   )

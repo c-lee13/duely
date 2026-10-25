@@ -17,6 +17,7 @@ import type {
   Submission,
   TimelineEvent,
 } from "./domain"
+import { advanceFeeFor } from "./protocol-copy"
 
 export interface ApiInvoiceRecord {
   id: string
@@ -96,8 +97,16 @@ export function figuresFor(status: OnchainInvoiceStatus, amount: string, advance
     case "Advanced":
     case "Disputed":
       return { escrowBalance: amount, freelancerReceived: advance, reserveCredited: "0" }
-    case "Settled":
-      return { escrowBalance: "0", freelancerReceived: amount, reserveCredited: advance }
+    case "Settled": {
+      // v1: the freelancer gets the whole amount (advance + remainder) and the reserve is repaid the advance.
+      // v2: the vault is repaid advance + fee, so the freelancer's total is amount - fee (when an advance was taken).
+      const fee = advance === "0" ? "0" : advanceFeeFor(amount)
+      return {
+        escrowBalance: "0",
+        freelancerReceived: (BigInt(amount) - BigInt(fee)).toString(10),
+        reserveCredited: (BigInt(advance) + BigInt(fee)).toString(10),
+      }
+    }
   }
 }
 

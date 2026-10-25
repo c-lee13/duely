@@ -20,6 +20,7 @@ import { Amount } from "@/components/duely/primitives"
 import { useInvoices, useRepository, useTransactions } from "@/hooks/use-duely"
 import type { OnchainInvoiceStatus, Session, TransactionRecord } from "@/lib/frontend/domain"
 import { sum, tokenNotice } from "@/lib/frontend/token"
+import { ClaimCard } from "@/components/duely/claim-card"
 
 const TX_LABEL: Record<TransactionRecord["action"], string> = {
   approve: "Allowance approved",
@@ -32,6 +33,9 @@ const TX_LABEL: Record<TransactionRecord["action"], string> = {
   cancelInvoice: "Invoice cancelled",
   withdrawReserve: "Reserve withdrawal",
   resolveDispute: "Dispute resolved",
+  claim: "Proceeds claimed",
+  vaultDeposit: "Vault deposit",
+  vaultWithdraw: "Vault withdrawal",
 }
 
 const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "Disputed", "Settled", "Cancelled"]
@@ -107,6 +111,8 @@ function Dashboard({ session }: { session: Session }) {
           <FilePlus2 /> New invoice
         </ButtonLink>
       </div>
+
+      <ClaimCard sessionKey={`${session.role}:${session.wallet}`} />
 
       {invoices.error ? (
         <ErrorState message={invoices.error} onRetry={invoices.reload} />

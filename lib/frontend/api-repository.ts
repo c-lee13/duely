@@ -17,7 +17,18 @@ import {
   getPublicClient,
   getReserveSnapshot,
   getTokenBalance,
+  approveVaultAllowance,
+  claimProceeds,
+  depositToVault,
+  getClaimable,
+  getLpPosition,
+  getVaultSnapshot,
   hasRole,
+  isV2,
+  redeemFromVault,
+  withdrawFromVault,
+  type LpPosition,
+  type VaultSnapshot,
   prepareDepositReserve,
   prepareFundInvoice,
   raiseDispute,
@@ -50,7 +61,9 @@ import type {
   InvoiceBundle,
   InvoiceDetail,
   InvoiceId,
+  ClaimableBalance,
   PlatformBalances,
+  VaultOverview,
   Session,
   Submission,
   SubmitEvidenceInput,
@@ -59,7 +72,16 @@ import type {
   TransactionRecord,
 } from "./domain"
 import { DomainError, type DomainErrorCode } from "./errors"
-import type { DuelyRepository, LiveControls, WalletControls } from "./repository"
+import type { ClaimControls, DuelyRepository, LiveControls, VaultControls, WalletControls } from "./repository"
+
+/** True when the v2 deployment is selected. A misconfigured selection is reported where it is used, not at construction. */
+function v2Selected(): boolean {
+  try {
+    return isV2()
+  } catch {
+    return false
+  }
+}
 
 const VIEW_KEY = "duely.live-view-role" // a UI preference only; never read as identity
 
@@ -225,6 +247,23 @@ export class ApiDuelyRepository implements DuelyRepository {
     subscribe: (listener) => this.walletPort.watch(listener),
   }
 
+  /** Present only under the v2 protocol (a v1 deployment has no vault). */
+  readonly vault: VaultControls | undefined = v2Selected()
+    ? {
+        getOverview: async () => this.readVault(await this.connectedAccount()),
+        deposit: (amount, onProgress) => this.vaultDeposit(amount, onProgress),
+        withdraw: (amount, onProgress) => this.vaultWithdraw("withdraw", amount, onProgress),
+        redeem: (shares, onProgress) => this.vaultWithdraw("redeem", shares, onProgress),
+      }
+    : undefined
+
+  readonly claims: ClaimControls | undefined = v2Selected()
+    ? {
+        getClaimable: () => this.readClaimable(),
+        claim: (onProgress) => this.claimProceeds(onProgress),
+      }
+    : undefined
+
   /** Browser-side chain READS (the public RPC). Authoritative for a wallet's own pre-flight checks; the server re-verifies independently. */
   private reader(): ChainReader {
     return this.readClientOverride ?? (getPublicClient() as unknown as ChainReader)
@@ -356,7 +395,8 @@ export class ApiDuelyRepository implements DuelyRepository {
     bundle.transactions = [...own, ...bundle.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     if (detail.chain.verified) {
       try {
-        bundle.reserveAvailable = (await getAvailableReserve({ client: this.reader() })).toString(10)
+        // v2: advances come from the vault, so "available" is what the vault can fund right now (maxAdvanceNow).
+        bundle.reserveAvailable = (isV2() ? (await getVaultSnapshot({ client: this.reader() })).maxAdvanceNow : await getAvailableReserve({ client: this.reader() })).toString(10)
       } catch {
         bundle.chainVerified = false // the reserve could not be read: say so instead of showing 0
       }
@@ -391,13 +431,27 @@ export class ApiDuelyRepository implements DuelyRepository {
     const mine = await this.mine()
     const state = await this.walletPort.state().catch(() => null)
     const account = (state?.account && mine.includes(state.account) ? state.account : mine[0]) as Address
-    const [snapshot, walletBalance, operator] = await Promise.all([
-      getReserveSnapshot({ client: this.reader() }),
+    const [walletBalance, operator] = await Promise.all([
       getTokenBalance(account, { client: this.reader() }),
       this.api<{ invoices: ApiInvoiceRecord[] }>("/api/operator/invoices"),
     ])
     const sum = (status: "Advanced" | "Disputed") =>
       operator.invoices.filter((i) => i.onchainStatus === status).reduce((acc, i) => acc + BigInt(i.advanceAmount), BigInt(0)).toString(10)
+    if (isV2()) {
+      // v2 has no operator reserve: the platform page reports the vault (one block) and the escrow total.
+      const vault = await this.readVault(account)
+      const { getEscrowTotals } = await import("@/lib/chain")
+      const totals = await getEscrowTotals({ client: this.reader() })
+      return {
+        reserveAvailable: vault.maxAdvanceNow,
+        escrowLocked: totals.totalEscrow.toString(10),
+        advancesOutstanding: sum("Advanced"),
+        advancesAtRisk: sum("Disputed"),
+        walletBalance: walletBalance.toString(10),
+        vault,
+      }
+    }
+    const snapshot = await getReserveSnapshot({ client: this.reader() })
     return {
       reserveAvailable: snapshot.availableReserve.toString(10),
       escrowLocked: snapshot.totalEscrow.toString(10),
@@ -663,6 +717,7 @@ export class ApiDuelyRepository implements DuelyRepository {
 
   async depositReserve(amount: TokenAmount, onProgress?: ProgressListener): Promise<void> {
     if (!/^[1-9][0-9]*$/.test(amount)) throw new DomainError("INVALID_INPUT", "Enter an amount greater than zero.")
+    if (isV2()) throw new DomainError("INVALID_INPUT", "This deployment has no operator reserve. Advances are funded by the liquidity vault; deposit on the Vault page instead.")
     const ctx = await this.operatorContext()
     const value = BigInt(amount)
     const token = tokenDisplay("api")
@@ -673,6 +728,74 @@ export class ApiDuelyRepository implements DuelyRepository {
     }
     await this.approveIfNeeded(ctx, value, ready.allowance.sufficient, token.symbol, undefined, onProgress)
     await this.tx(ctx, { label: "Deposit to reserve", action: "depositReserve", onProgress, submit: () => sdkDepositReserve(value, ctx) })
+    this.invalidate()
+  }
+
+  // ---- v2: vault liquidity provider and pull-payment claims -------------------------------------------------------
+
+  /** The connected MetaMask account if it is one of this sign-in's verified wallets; null when no wallet is connected. */
+  private async connectedAccount(): Promise<Address | null> {
+    const state = await this.walletPort.state().catch(() => null)
+    if (!state?.account) return null
+    const mine = await this.mine().catch(() => [] as Address[])
+    return mine.includes(state.account) ? state.account : null
+  }
+
+  /** Vault figures at one block, plus the position of `account` when given (reads only: no wallet needed for the figures). */
+  private async readVault(account: Address | null): Promise<VaultOverview> {
+    const client = this.reader()
+    const snapshot = await getVaultSnapshot({ client })
+    const position = account ? await getLpPosition(account, { client, blockNumber: snapshot.blockNumber }) : null
+    return toVaultOverview(snapshot, position)
+  }
+
+  private async readClaimable(): Promise<ClaimableBalance> {
+    const account = await this.connectedAccount()
+    if (!account) throw new DomainError("WALLET_NOT_CONNECTED", "Connect your wallet to see proceeds you can claim.")
+    const client = this.reader()
+    const [claimable, walletBalance] = await Promise.all([getClaimable(account, { client }), getTokenBalance(account, { client })])
+    return { account, claimable: claimable.toString(10), walletBalance: walletBalance.toString(10) }
+  }
+
+  private async claimProceeds(onProgress?: ProgressListener): Promise<void> {
+    const ctx = await this.sdkContext(undefined)
+    const owed = await getClaimable(ctx.account, { client: this.reader() })
+    if (owed === BigInt(0)) throw new DomainError("INVALID_STATUS", "Nothing is waiting for this wallet to claim.")
+    await this.tx(ctx, { label: "Claim proceeds", action: "claim", onProgress, submit: () => claimProceeds(ctx.account, ctx) })
+    this.invalidate()
+  }
+
+  private async vaultDeposit(amount: TokenAmount, onProgress?: ProgressListener): Promise<void> {
+    if (!/^[1-9][0-9]*$/.test(amount)) throw new DomainError("INVALID_INPUT", "Enter an amount greater than zero.")
+    const ctx = await this.sdkContext(undefined)
+    const value = BigInt(amount)
+    const token = tokenDisplay("api")
+    const client = this.reader()
+    // Refuse BEFORE asking for an approval: approving into a paused vault would cost gas for a deposit that can't happen.
+    if ((await getVaultSnapshot({ client })).paused) throw new DomainError("INVALID_STATUS", "The vault is paused, so deposits are stopped right now. Try again later.")
+    const position = await getLpPosition(ctx.account, { client })
+    if (position.walletBalance < value) {
+      throw new DomainError("INSUFFICIENT_BALANCE", `This wallet holds ${formatToken(position.walletBalance.toString(10), { token, maxFraction: 6 })} but the deposit needs ${formatToken(amount, { token, maxFraction: 6 })}.`)
+    }
+    if (position.vaultAllowance < value) {
+      // Exactly the amount, never unlimited.
+      await this.tx(ctx, { label: `Approve ${token.symbol} for the vault`, action: "approve", onProgress, submit: () => approveVaultAllowance(value, ctx) })
+    }
+    await this.tx(ctx, { label: "Deposit to vault", action: "vaultDeposit", onProgress, submit: () => depositToVault(value, ctx) })
+    this.invalidate()
+  }
+
+  private async vaultWithdraw(kind: "withdraw" | "redeem", amount: TokenAmount, onProgress?: ProgressListener): Promise<void> {
+    if (!/^[1-9][0-9]*$/.test(amount)) throw new DomainError("INVALID_INPUT", "Enter an amount greater than zero.")
+    const ctx = await this.sdkContext(undefined)
+    const value = BigInt(amount)
+    // The SDK refuses (before anything is sent) what vault liquidity doesn't allow; surface its explanation as-is.
+    await this.tx(ctx, {
+      label: kind === "redeem" ? "Withdraw vault shares" : "Withdraw from vault",
+      action: "vaultWithdraw",
+      onProgress,
+      submit: () => (kind === "redeem" ? redeemFromVault(value, ctx) : withdrawFromVault(value, ctx)),
+    })
     this.invalidate()
   }
 
@@ -706,5 +829,41 @@ export function toTransactionRecord(e: TxLogEntry): TransactionRecord {
     createdAt: new Date(e.createdAt).toISOString(),
     settledAt: e.status === "confirmed" ? new Date(e.createdAt).toISOString() : undefined,
     error: e.status === "failed" || e.status === "unknown" ? e.error : undefined,
+  }
+}
+
+/** Maps the SDK's vault snapshot (bigints) onto the UI's string amounts. */
+export function toVaultOverview(s: VaultSnapshot, p: LpPosition | null): VaultOverview {
+  const str = (n: bigint) => n.toString(10)
+  return {
+    blockNumber: str(s.blockNumber),
+    totalAssets: str(s.totalAssets),
+    availableLiquidity: str(s.cash),
+    outstandingPrincipal: str(s.outstandingPrincipal),
+    withdrawableLiquidity: str(s.withdrawableLiquidity),
+    maxAdvanceNow: str(s.maxAdvanceNow),
+    utilizationBps: Number(s.utilizationBps),
+    totalFeesEarned: str(s.totalFeesEarned),
+    totalRealizedLosses: str(s.totalRealizedLosses),
+    sharePrice: str(s.sharePriceAssets),
+    totalShares: str(s.totalShares),
+    shareSymbol: s.shareSymbol,
+    shareDecimals: s.shareDecimals,
+    paused: s.paused,
+    advancesPaused: s.advancesPaused,
+    feeBps: Number(s.feeBps),
+    maxUtilizationBps: Number(s.maxUtilizationBps),
+    maxInvoiceExposureBps: Number(s.maxInvoiceExposureBps),
+    position: p
+      ? {
+          account: p.account.toLowerCase() as Address,
+          shares: str(p.shares),
+          assetValue: str(p.assetValue),
+          maxWithdraw: str(p.maxWithdraw),
+          maxRedeem: str(p.maxRedeem),
+          walletBalance: str(p.walletBalance),
+          vaultAllowance: str(p.vaultAllowance),
+        }
+      : null,
   }
 }

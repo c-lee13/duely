@@ -22,6 +22,9 @@ import { useInvoices, useRepoQuery, useRepository, useTransactions } from "@/hoo
 import type { InvoiceDetail, OnchainInvoiceStatus, Session, TransactionRecord } from "@/lib/frontend/domain"
 import { evaluationFor, freelancerNextStep, getAdvanceEligibility, type FreelancerNextStep } from "@/lib/frontend/eligibility"
 import { advanceFor, isZero, sub, sum, tokenNotice } from "@/lib/frontend/token"
+import { fundingCopy } from "@/lib/frontend/protocol-copy"
+import { ClaimCard } from "@/components/duely/claim-card"
+import { settlementProjection } from "@/lib/frontend/eligibility"
 
 const NEXT: Record<FreelancerNextStep, { label: string; tone: "neutral" | "info" | "advance" | "success" | "warning" | "danger" }> = {
   await_funding: { label: "Waiting for client to fund", tone: "neutral" },
@@ -67,7 +70,7 @@ function useAdvanceOffers(list: InvoiceDetail[], sessionKey: string) {
 function PaymentRow({ tx, invoice, simulated }: { tx: TransactionRecord; invoice?: InvoiceDetail; simulated: boolean }) {
   const isAdvance = tx.action === "approveAdvance"
   // Settlement payout to the freelancer is the escrow remainder after the advance.
-  const amount = isAdvance ? tx.amount : invoice ? sub(invoice.amount, invoice.advanceAmount) : undefined
+  const amount = isAdvance ? tx.amount : invoice ? settlementProjection(invoice).toFreelancer : undefined
   const confirmed = tx.status === "confirmed"
   return (
     <li className="flex items-center gap-3 px-4 py-3">
@@ -76,7 +79,7 @@ function PaymentRow({ tx, invoice, simulated }: { tx: TransactionRecord; invoice
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">
-          {isAdvance ? "90% advance from reserve" : "Settlement payout"}
+          {isAdvance ? `90% advance from ${fundingCopy().short}` : "Settlement payout"}
           {tx.invoiceId && <span className="font-normal text-muted-foreground"> · #{tx.invoiceId}</span>}
         </p>
         <p className="text-xs text-muted-foreground">
@@ -149,8 +152,8 @@ function Dashboard({ session }: { session: Session }) {
   const advances = sum(list.map((i) => i.advanceAmount))
   const settlements = sub(received, advances)
   const open = list.filter((i) => i.onchainStatus === "Funded" || i.onchainStatus === "Advanced")
-  const pending = sum(open.map((i) => sub(i.amount, i.freelancerReceived)))
-  const frozen = sum(list.filter((i) => i.onchainStatus === "Disputed").map((i) => sub(i.amount, i.freelancerReceived)))
+  const pending = sum(open.map((i) => settlementProjection(i).toFreelancer))
+  const frozen = sum(list.filter((i) => i.onchainStatus === "Disputed").map((i) => settlementProjection(i).toFreelancer))
   const count = (st: OnchainInvoiceStatus) => list.filter((i) => i.onchainStatus === st).length
 
   const byId = new Map(list.map((i) => [i.invoiceId, i]))
@@ -173,6 +176,8 @@ function Dashboard({ session }: { session: Session }) {
         <h1 className="truncate text-2xl font-semibold tracking-tight">Hi, {session.displayName}</h1>
       </div>
 
+      <ClaimCard sessionKey={`${session.role}:${session.wallet}`} />
+
       {invoices.error ? (
         <ErrorState message={invoices.error} onRetry={invoices.reload} />
       ) : (
@@ -194,15 +199,17 @@ function Dashboard({ session }: { session: Session }) {
                   {unverified ? <span className="text-3xl">Unavailable</span> : <Amount value={received} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />}
                 </p>
                 <p className="mt-1 max-w-md text-xs text-navy-foreground/70">
-                  Advances come from the separate platform reserve; the rest is paid from escrow after the client
-                  approves. {tokenNotice()}
+                  {fundingCopy().pull
+                    ? "Advances come from the liquidity vault; the rest is credited to you from escrow after the client approves, and you claim it below."
+                    : "Advances come from the separate platform reserve; the rest is paid from escrow after the client approves."}{" "}
+                  {tokenNotice()}
                 </p>
               </div>
               <dl className="relative mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-white/10 p-3 ring-1 ring-white/15">
                   <dt className="text-xs text-navy-foreground/70">Advances received</dt>
                   <dd className="mt-0.5 text-lg font-semibold tabular-nums">{unverified ? NotConnected : <Amount value={advances} hideSymbol />}</dd>
-                  <p className="text-[11px] text-navy-foreground/60">Confirmed · from reserve</p>
+                  <p className="text-[11px] text-navy-foreground/60">Confirmed · from {fundingCopy().short}</p>
                 </div>
                 <div className="rounded-xl bg-white/10 p-3 ring-1 ring-white/15">
                   <dt className="text-xs text-navy-foreground/70">Pending earnings</dt>
@@ -237,7 +244,7 @@ function Dashboard({ session }: { session: Session }) {
                 ))}
               </ul>
               <p className="text-xs text-muted-foreground">
-                An advance (90% of the invoice, from the platform reserve) needs a passing AI evaluation and your
+                An advance (90% of the invoice, from {fundingCopy().source}) needs a passing AI evaluation and your
                 explicit request. It shows as paid only after it is confirmed.
               </p>
             </section>

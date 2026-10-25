@@ -6,11 +6,13 @@ import {
   activeDeploymentIdentity,
   explorerTxUrl,
   getAvailableReserve,
+  escrowAbi,
+  isV2,
+  getVaultSnapshot,
   hasRole,
   getInvoice,
   getPaymentTokenAddress,
   getTransactionStatus,
-  invoiceAdvanceAbi,
   trackTransaction,
   decodeInvoiceAdvanceEvents,
   type ChainWriteClient,
@@ -205,6 +207,10 @@ export function createChainAdapter(opts: { scope: DeploymentScope; client?: Adap
     async getReserveAvailable() {
       const c = client()
       await assertClientChain(c)
+      // v2: advances are funded by DuelyVault, so "available" is what the vault can actually fund this block
+      // (maxAdvanceNow: cash, the 80% utilization headroom, the 25% per-invoice cap and both pauses all applied),
+      // not a reserve balance. 900 RLUSD therefore needs at least 3,600 RLUSD of vault NAV.
+      if (isV2()) return (await getVaultSnapshot({ client: c })).maxAdvanceNow
       return getAvailableReserve({ client: c })
     },
 
@@ -233,7 +239,7 @@ export function createChainAdapter(opts: { scope: DeploymentScope; client?: Adap
       const head = await c.getBlockNumber()
       const deployBlock = BigInt(activeDeployment().invoiceAdvance.deployBlock)
       const floor = head > RECOVERY_LOOKBACK_BLOCKS ? head - RECOVERY_LOOKBACK_BLOCKS : BigInt(0)
-      const event = invoiceAdvanceAbi.find((x) => x.type === "event" && x.name === "AdvancePaid")
+      const event = escrowAbi().find((x) => x.type === "event" && x.name === "AdvancePaid")
       if (!event || event.type !== "event") throw new Error("AdvancePaid is missing from the ABI")
       const logs = await c.getLogs({
         address: scope.contractAddress as Address,

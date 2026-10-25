@@ -7,7 +7,8 @@ import type {
   SubmissionStatus,
   TokenAmount,
 } from "./domain"
-import { advanceFor, formatToken, gte, isZero, sub } from "./token"
+import { advanceFeeFor, v2Active } from "./protocol-copy"
+import { advanceFor, formatToken, gte, isZero, sub, sum } from "./token"
 
 /**
  * UI-side previews of eligibility. The server and contract stay authoritative;
@@ -117,7 +118,9 @@ export function getAdvanceEligibility(args: {
   if (!gte(reserveAvailable, amount)) {
     blockers.push({
       code: "INSUFFICIENT_RESERVE",
-      message: `The platform reserve has ${formatToken(reserveAvailable)} available, but this advance needs ${formatToken(amount)}. Try again after the platform tops up the reserve.`,
+      message: v2Active()
+        ? `The vault can fund up to ${formatToken(reserveAvailable)} right now (its liquidity and risk limits apply), but this advance needs ${formatToken(amount)}. Try again after liquidity is added or other advances are repaid.`
+        : `The platform reserve has ${formatToken(reserveAvailable)} available, but this advance needs ${formatToken(amount)}. Try again after the platform tops up the reserve.`,
     })
   }
 
@@ -142,9 +145,12 @@ export function canSubmitEvidence(status: OnchainInvoiceStatus) {
 
 /** What client approval will move, given the actual advance. */
 export function settlementProjection(invoice: InvoiceDetail) {
-  const reserveCredit = invoice.advanceAmount
-  const toFreelancer = sub(invoice.amount, invoice.advanceAmount)
-  return { reserveCredit, toFreelancer }
+  // v1: the reserve is repaid the advance. v2: the vault is repaid advance + fee (only when an advance was taken), and the
+  // freelancer's remainder is credited to claim. `fee` is "0" under v1.
+  const fee = isZero(invoice.advanceAmount) ? "0" : advanceFeeFor(invoice.amount)
+  const reserveCredit = sum([invoice.advanceAmount, fee])
+  const toFreelancer = sub(invoice.amount, reserveCredit)
+  return { reserveCredit, toFreelancer, fee }
 }
 
 export function deriveSubmissionStatus(

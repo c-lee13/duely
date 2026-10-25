@@ -36,6 +36,7 @@ import {
   type ChainWriteErrorCode,
 } from "./errors"
 import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
+import { duelyVaultAbi, escrowAbi, isV2 } from "./protocol"
 import { tokenPauseAbi } from "./token-pause"
 import {
   INVOICE_STATUSES,
@@ -145,17 +146,26 @@ type InvoiceAdvanceWriteName = Extract<
   (typeof invoiceAdvanceAbi)[number],
   { type: "function"; stateMutability: "nonpayable" }
 >["name"]
+type VaultWriteName = Extract<
+  (typeof duelyVaultAbi)[number],
+  { type: "function"; stateMutability: "nonpayable" }
+>["name"]
 type TokenWriteName = Extract<
   (typeof paymentTokenAbi)[number],
   { type: "function"; stateMutability: "nonpayable" }
 >["name"]
 
 // Token errors are added to the decode ABI so reverts bubbling up from SafeERC20 are readable.
-const INVOICE_ADVANCE_DECODE_ABI = [
-  ...invoiceAdvanceAbi,
-  ...paymentTokenAbi.filter((item) => item.type === "error"),
-  ...tokenPauseAbi.filter((item) => item.type === "error"),
-] as Abi
+// Under v2 the escrow ABI is InvoiceAdvanceV2's, and DuelyVault's errors are added because vault reverts
+// (InsufficientLiquidity, ExceedsUtilizationLimit, ...) bubble up through the escrow call.
+function invoiceAdvanceDecodeAbi(): Abi {
+  return [
+    ...escrowAbi(),
+    ...(isV2() ? duelyVaultAbi.filter((item) => item.type === "error") : []),
+    ...paymentTokenAbi.filter((item) => item.type === "error"),
+    ...tokenPauseAbi.filter((item) => item.type === "error"),
+  ] as Abi
+}
 
 // Token calls are simulated against this ABI, so a paused token's revert decodes as EnforcedPause.
 const TOKEN_CALL_ABI = [
@@ -226,6 +236,9 @@ function describeRevert(
   if (name === "InvalidStatus" && args.length === 2) {
     const status = Number(args[1])
     return `InvalidStatus: invoice is ${INVOICE_STATUSES[status] ?? status}`
+  }
+  if (name === "InsufficientLiquidity" && args.length === 2) {
+    return `InsufficientLiquidity: required ${String(args[0])}, available ${String(args[1])} (base units)`
   }
   if (name === "InsufficientReserve" && args.length === 2) {
     return `InsufficientReserve: required ${String(args[0])}, available ${String(args[1])} (base units)`
@@ -457,10 +470,14 @@ async function acquire(
 
 // ---- core ------------------------------------------------------------------------------------
 
-interface Call {
+export interface Call {
   address: HexAddress
   abi: Abi
-  functionName: InvoiceAdvanceWriteName | TokenWriteName
+  functionName:
+    | InvoiceAdvanceWriteName
+    | TokenWriteName
+    | VaultWriteName
+    | "claim"
   args: readonly unknown[]
   label: string
   /** The on-chain evidence this call must produce, given the sender. */
@@ -513,7 +530,8 @@ async function assertReady(
   return account.address as HexAddress
 }
 
-async function submit(
+/** @internal Shared with ./vault (v2 claim and LP operations); deliberately not part of the public index. */
+export async function submit(
   ctx: WriteContext,
   call: Call
 ): Promise<SubmittedTransaction> {
@@ -593,7 +611,7 @@ function invoiceAdvanceCall(
 ): Call {
   return {
     address: contractAddresses.invoiceAdvance,
-    abi: INVOICE_ADVANCE_DECODE_ABI,
+    abi: invoiceAdvanceDecodeAbi(),
     functionName,
     args,
     label,

@@ -1,6 +1,7 @@
 import type {
   Address,
   AdvanceRequestResult,
+  ClaimableBalance,
   CreateInvoiceInput,
   DemoRole,
   EvaluationRecord,
@@ -15,6 +16,7 @@ import type {
   TimelineEvent,
   TokenAmount,
   TransactionRecord,
+  VaultOverview,
 } from "./domain"
 import type { ProgressListener } from "./tx-runner"
 import type { WalletState } from "./wallet-chain"
@@ -69,6 +71,12 @@ export interface DuelyRepository {
   /** Change notifications so open screens refresh. */
   subscribe(listener: () => void): () => void
 
+  /** Present only in API mode under the v2 protocol: DuelyVault liquidity provider operations. */
+  readonly vault?: VaultControls
+
+  /** Present only in API mode under the v2 protocol: pull-payment proceeds (freelancer remainder, client refund). */
+  readonly claims?: ClaimControls
+
   /** Present only in mock mode. Never authorizes anything in API mode. */
   readonly demo?: DemoControls
 
@@ -77,6 +85,24 @@ export interface DuelyRepository {
 
   /** Present only in API (live) mode: the browser wallet used for transactions. */
   readonly wallet?: WalletControls
+}
+
+export interface VaultControls {
+  /** Vault figures at one block plus the connected wallet's position. Never cached or invented. */
+  getOverview(): Promise<VaultOverview>
+  /** Wallet txs: exact-amount token approval to the vault (only if needed) + deposit. Resolves after both are confirmed. */
+  deposit(amount: TokenAmount, onProgress?: ProgressListener): Promise<void>
+  /** Wallet tx: withdraw a fixed amount of the token, refused up front when it exceeds what vault liquidity allows. */
+  withdraw(amount: TokenAmount, onProgress?: ProgressListener): Promise<void>
+  /** Wallet tx: redeem shares (use for "withdraw all", which avoids dust), refused up front above the liquidity limit. */
+  redeem(shares: TokenAmount, onProgress?: ProgressListener): Promise<void>
+}
+
+export interface ClaimControls {
+  /** Proceeds credited to the connected wallet inside the escrow contract, and its wallet balance (they are different). */
+  getClaimable(): Promise<ClaimableBalance>
+  /** Wallet tx: claim(recipient = the connected wallet). Resolves after a verified ProceedsClaimed event. */
+  claim(onProgress?: ProgressListener): Promise<void>
 }
 
 export interface WalletControls {

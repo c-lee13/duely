@@ -1,11 +1,11 @@
 import type { Metadata } from "next"
-import { VaultPreview } from "@/components/duely/vault-preview"
+import { VaultEntry } from "@/components/duely/vault-entry"
 
 export const metadata: Metadata = {
-  title: "Vault (V2 preview) | Duely",
-  description: "Preview of the Duely V2 liquidity vault. Placeholder figures only; not connected to the blockchain.",
+  title: "Vault | Duely",
+  description: "The Duely liquidity vault: supply RLUSD to fund freelancer advances. Live on the v2 deployment; a placeholder preview otherwise.",
 }
 
 export default function VaultPage() {
-  return <VaultPreview />
+  return <VaultEntry />
 }

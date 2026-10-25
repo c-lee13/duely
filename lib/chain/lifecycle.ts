@@ -35,6 +35,7 @@ import {
   type ExpectedReceipt,
 } from "./expected"
 import { invoiceAdvanceAbi, paymentTokenAbi } from "./generated"
+import { duelyVaultAbi, escrowAbi, vaultAddress } from "./protocol"
 import {
   mapWriteError,
   releaseByHash,
@@ -180,7 +181,7 @@ export function decodeInvoiceAdvanceEvents(
       log.address.toLowerCase() ===
       contractAddresses.invoiceAdvance.toLowerCase()
   )
-  return parseEventLogs({ abi: invoiceAdvanceAbi, logs: own })
+  return parseEventLogs({ abi: escrowAbi() as typeof invoiceAdvanceAbi, logs: own })
 }
 
 export interface InvoiceCreatedFilter {
@@ -269,14 +270,21 @@ function verifyReceipt(
   expected: ExpectedReceipt,
   from: string
 ): Verification {
-  const address = contractAddresses[expected.contract]
+  const address =
+    expected.contract === "duelyVault"
+      ? vaultAddress()
+      : contractAddresses[expected.contract]
   if (!sameAddress(receipt.from, from)) return { ok: false, why: "sender" }
   if (!sameAddress(receipt.to ?? null, address)) {
     return { ok: false, why: "target" }
   }
   const logs = receipt.logs.filter((log) => sameAddress(log.address, address))
   const abi =
-    expected.contract === "invoiceAdvance" ? invoiceAdvanceAbi : paymentTokenAbi
+    expected.contract === "invoiceAdvance"
+      ? escrowAbi()
+      : expected.contract === "duelyVault"
+        ? duelyVaultAbi
+        : paymentTokenAbi
   const decoded = parseEventLogs({
     abi: abi as Abi,
     logs,
@@ -734,7 +742,7 @@ export function parseSubmittedTransaction(json: string): SubmittedTransaction {
     const stored = raw.deployment
     if (
       !isRecord(stored) ||
-      (stored.key !== "dusd" && stored.key !== "rlusd") ||
+      (stored.key !== "dusd" && stored.key !== "rlusd" && stored.key !== "v2") ||
       typeof stored.invoiceAdvance !== "string" ||
       !isAddress(stored.invoiceAdvance, { strict: true }) ||
       typeof stored.paymentToken !== "string" ||

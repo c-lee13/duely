@@ -18,6 +18,7 @@ import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import { ACTORS, nameForWallet } from "@/lib/mocks/actors"
 import type { Address } from "@/lib/frontend/domain"
 import { advanceFor, parseTokenInput, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { advanceFeeFor, fundingCopy } from "@/lib/frontend/protocol-copy"
 
 interface CriterionDraft {
   key: number
@@ -148,7 +149,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
               <div>
                 <dt className="text-muted-foreground">Possible 90% advance</dt>
                 <dd className="mt-0.5">
-                  <Amount value={advanceFor(amount)} /> <span className="text-muted-foreground">from the reserve, if requested</span>
+                  <Amount value={advanceFor(amount)} /> <span className="text-muted-foreground">from {fundingCopy().source}, if requested</span>
                 </dd>
               </div>
               {dueDate && (
@@ -271,7 +272,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
             </div>
             {amount && BigInt(amount) > BigInt(0) && (
               <p className="text-sm text-muted-foreground">
-                If the freelancer requests an advance, <Amount value={advanceFor(amount)} /> (90%, rounded down) is paid from the platform reserve.
+                If the freelancer requests an advance, <Amount value={advanceFor(amount)} /> (90%, rounded down) is paid from {fundingCopy().source}.{fundingCopy().pull ? <> At settlement the vault is repaid that amount plus a <Amount value={advanceFeeFor(amount)} /> financing fee out of the invoice.</> : null}
               </p>
             )}
             <Field

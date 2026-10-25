@@ -37,6 +37,7 @@ import { Amount, AddressChip } from "./primitives"
 import { LiveAuthGate } from "./live-auth"
 import { WalletStatusBar } from "./wallet-status"
 import { useToast } from "./toast"
+import { platformNavLabel } from "@/lib/frontend/protocol-copy"
 
 export const ROLE_HOME: Record<DemoRole, string> = {
   client: "/client",
@@ -63,7 +64,7 @@ const NAV: Record<DemoRole, Array<{ href: string; label: string }>> = {
     { href: "/profile", label: "Profile" },
   ],
   platform: [
-    { href: "/platform", label: "Reserve" },
+    { href: "/platform", label: platformNavLabel() },
     { href: "/activity", label: "Activity" },
     { href: "/profile", label: "Profile" },
   ],

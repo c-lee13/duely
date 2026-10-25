@@ -5,6 +5,7 @@ import { loadInvoiceAsParty, requireFreelancer, requireUser } from "./access"
 import { callChain } from "./invoices"
 import { reconcileAdvance } from "./reconcile"
 import { advanceAmountFor } from "@/lib/chain/amounts"
+import { isV2 } from "@/lib/chain/protocol"
 import { computeEvaluationHash } from "@/lib/shared/evaluation-hash"
 import { DuplicateAdvanceError, type AdvanceRequestData, type BackendDeps, type ChainInvoiceState } from "./ports"
 
@@ -123,7 +124,12 @@ export async function requestAdvance(
   const advance = advanceAmountFor(state.amount)
   const reserve = await callChain(() => deps.chain.getReserveAvailable())
   if (reserve < advance) {
-    throw new ApiError("INSUFFICIENT_RESERVE", "The platform reserve can't cover this advance right now. Try again after it is topped up.")
+    throw new ApiError(
+      "INSUFFICIENT_RESERVE",
+      isV2()
+        ? "The vault can't fund this advance right now (not enough available liquidity, or a vault limit applies). Try again after liquidity is added or other advances are repaid."
+        : "The platform reserve can't cover this advance right now. Try again after it is topped up."
+    )
   }
 
   let request: AdvanceRequestData

@@ -22,8 +22,10 @@ compatible. Step 3 additionally requires the vault to be unlinked and signed by 
 `CHAIN_ID` `DEPLOYER_ADDRESS` `ADMIN_ADDRESS` `OPERATOR_ADDRESS` `EVALUATOR_ADDRESS` `TOKEN_ADDRESS` and the
 RPC via `XRPL_EVM_RPC_URL` (used through the `xrpl_evm_testnet` alias). Signing: `DEPLOYER_PRIVATE_KEY` if set,
 otherwise `--account duely-deployer` (it is empty in the current `.env`, so the keystore is used).
-Per step you pass `VAULT_ADDRESS` / `ESCROW_ADDRESS` inline. **Do not `source .env`:** `ADMIN_ADDRESS=$OPERATOR_ADDRESS`
-only expands through Foundry's own dotenv loading.
+`VAULT_ADDRESS` and `ESCROW_ADDRESS` are now stored in `.env` (the deployed values), so the steps no longer need them
+inline; with them set, steps 2 and 3 refuse because the vault is already linked. `ADMIN_ADDRESS` is a literal address in
+`.env` (it used to be a duplicate `$OPERATOR_ADDRESS` reference). Run `forge` from `contracts/`: that is where `foundry.toml`
+(the `xrpl_evm_testnet` RPC alias) and the `.env` symlink are found.
 
 ## Commands (run from `contracts/`)
 

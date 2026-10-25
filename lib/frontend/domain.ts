@@ -132,12 +132,18 @@ export interface EvaluationRecord extends EvaluationResult {
   errorMessage?: string
 }
 
+/**
+ * Every wallet action the UI can log: the shared contract actions, the ERC-20 allowance step, and the v2-only actions.
+ * The v2 ones are browser-log only (they are not rows of the `transactions` table, so TX_ACTIONS is unchanged).
+ */
+export type UiTxAction = TxAction | "approve" | "claim" | "vaultDeposit" | "vaultWithdraw"
+
 export type TxStatus = "pending" | "confirmed" | "failed"
 
 export interface TransactionRecord {
   id: string
-  /** `approve` is the ERC-20 allowance step that precedes funding or a reserve deposit. */
-  action: TxAction | "approve"
+  /** `approve` is the ERC-20 allowance step that precedes funding, a reserve deposit or a vault deposit. */
+  action: UiTxAction
   status: TxStatus
   invoiceId?: InvoiceId
   amount?: TokenAmount
@@ -202,6 +208,51 @@ export interface InvoiceBundle {
   chainVerified?: boolean
 }
 
+/** v2 only: the DuelyVault, every figure read at one block. Amounts are base units (strings). */
+export interface VaultOverview {
+  blockNumber: string
+  /** NAV: cash + outstanding principal. */
+  totalAssets: TokenAmount
+  /** RLUSD actually in the vault. */
+  availableLiquidity: TokenAmount
+  outstandingPrincipal: TokenAmount
+  /** What LPs can pull out right now (keeps utilization under the cap). */
+  withdrawableLiquidity: TokenAmount
+  /** Largest advance the vault could fund right now. */
+  maxAdvanceNow: TokenAmount
+  utilizationBps: number
+  totalFeesEarned: TokenAmount
+  totalRealizedLosses: TokenAmount
+  /** Asset base units per ONE whole share. */
+  sharePrice: TokenAmount
+  totalShares: TokenAmount
+  shareSymbol: string
+  shareDecimals: number
+  paused: boolean
+  advancesPaused: boolean
+  feeBps: number
+  maxUtilizationBps: number
+  maxInvoiceExposureBps: number
+  /** The connected wallet's LP position, or null when no wallet is connected. */
+  position: null | {
+    account: Address
+    shares: TokenAmount
+    assetValue: TokenAmount
+    maxWithdraw: TokenAmount
+    maxRedeem: TokenAmount
+    /** Wallet balance of the payment token (NOT claimable proceeds). */
+    walletBalance: TokenAmount
+    vaultAllowance: TokenAmount
+  }
+}
+
+/** v2 only: proceeds credited inside the escrow contract (claimable) are NOT the same as the wallet balance. */
+export interface ClaimableBalance {
+  account: Address
+  claimable: TokenAmount
+  walletBalance: TokenAmount
+}
+
 export interface PlatformBalances {
   /** Reserve tokens available to fund advances. */
   reserveAvailable: TokenAmount
@@ -213,6 +264,8 @@ export interface PlatformBalances {
   advancesAtRisk: TokenAmount
   /** Balance of the connected demo wallet. */
   walletBalance: TokenAmount
+  /** v2 only: the vault behind advances. `reserveAvailable` then means the vault's `maxAdvanceNow`. */
+  vault?: VaultOverview
 }
 
 export interface CreateInvoiceInput {

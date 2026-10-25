@@ -44,6 +44,7 @@ import { canClientApprove, canClientDispute, canFund, evaluationFor, settlementP
 import { isGithubEvaluation } from "@/lib/frontend/github-evaluation"
 import { githubLinks, shortSha } from "@/lib/frontend/github-input"
 import { formatToken, isZero } from "@/lib/frontend/token"
+import { fundingCopy } from "@/lib/frontend/protocol-copy"
 
 function Detail({ session, invoiceId }: { session: Session; invoiceId: string }) {
   const q = useInvoiceBundle(invoiceId, session.role)
@@ -62,6 +63,7 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
 }
 
 function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void }) {
+  const fc = fundingCopy()
   const toast = useToast()
   const { invoice, submissions, evaluations, timeline, transactions, reserveAvailable } = bundle
   const live = useRepository().mode === "api"
@@ -100,8 +102,12 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
         tone: "success",
         title: `Invoice settled${sim}`,
         description: hasAdvance
-          ? `${formatToken(proj.reserveCredit)} credited to the reserve, ${formatToken(proj.toFreelancer)} paid to the freelancer.`
-          : `${formatToken(proj.toFreelancer)} paid to the freelancer.`,
+          ? fc.pull
+            ? `${formatToken(proj.reserveCredit)} repaid to the vault (advance + fee); ${formatToken(proj.toFreelancer)} credited to the freelancer to claim.`
+            : `${formatToken(proj.reserveCredit)} credited to the reserve, ${formatToken(proj.toFreelancer)} paid to the freelancer.`
+          : fc.pull
+            ? `${formatToken(proj.toFreelancer)} credited to the freelancer to claim.`
+            : `${formatToken(proj.toFreelancer)} paid to the freelancer.`,
       })
     else toast({ tone: "error", title: "Approval not completed", description: r.error })
   }
@@ -159,9 +165,13 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
           {invoice.onchainStatus === "Advanced" && (
             <Alert>
               <CheckCircle2 />
-              <AlertTitle>90% advance paid from the reserve</AlertTitle>
+              <AlertTitle>90% advance paid from {fc.source}</AlertTitle>
               <AlertDescription>
-                The freelancer received <Amount value={invoice.advanceAmount} />. Approving credits that amount back to the reserve and pays them the remaining <Amount value={proj.toFreelancer} />.
+                {fc.pull ? (
+                  <>The freelancer received <Amount value={invoice.advanceAmount} />. Approving repays the vault <Amount value={proj.reserveCredit} /> (the advance plus a <Amount value={proj.fee} /> financing fee) and credits the remaining <Amount value={proj.toFreelancer} /> to the freelancer to claim.</>
+                ) : (
+                  <>The freelancer received <Amount value={invoice.advanceAmount} />. Approving credits that amount back to the reserve and pays them the remaining <Amount value={proj.toFreelancer} />.</>
+                )}
               </AlertDescription>
             </Alert>
           )}
@@ -170,9 +180,9 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
               <AlertOctagon />
               <AlertTitle>Settlement is frozen</AlertTitle>
               <AlertDescription>
-                Escrow stays locked and the invoice can&apos;t be approved. {hasAdvance ? <>The <Amount value={invoice.advanceAmount} /> advance isn&apos;t clawed back; the platform bears that risk. </> : null}
+                Escrow stays locked and the invoice can&apos;t be approved. {hasAdvance ? <>The <Amount value={invoice.advanceAmount} /> advance isn&apos;t clawed back; {fc.pull ? "the vault\u2019s liquidity providers bear that loss" : "the platform bears that risk"}. </> : null}
                 {live
-                  ? "The platform operator now resolves it on-chain: either the freelancer is paid as normal, or the whole escrow is refunded to you. Either way the advance already paid is not clawed back."
+                  ? `The platform operator now resolves it on-chain: either the freelancer is paid as normal, or the whole escrow is refunded to you${fc.pull ? " (credited for you to claim)" : ""}. Either way the advance already paid is not clawed back.`
                   : "No automatic refund or arbitration exists. Resolution is handled manually outside this demo."}
               </AlertDescription>
             </Alert>
@@ -183,9 +193,13 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
               <AlertTitle>Settled</AlertTitle>
               <AlertDescription>
                 {hasAdvance ? (
-                  <>Escrow credited <Amount value={invoice.reserveCredited} /> to the reserve and paid <Amount value={proj.toFreelancer} /> to the freelancer.</>
+                  fc.pull ? (
+                    <>Escrow repaid the vault <Amount value={invoice.reserveCredited} /> (advance plus fee) and credited <Amount value={proj.toFreelancer} /> to the freelancer to claim.</>
+                  ) : (
+                    <>Escrow credited <Amount value={invoice.reserveCredited} /> to the reserve and paid <Amount value={proj.toFreelancer} /> to the freelancer.</>
+                  )
                 ) : (
-                  <>No advance was taken, so escrow paid the full <Amount value={invoice.amount} /> to the freelancer.</>
+                  <>No advance was taken, so escrow {fc.pull ? "credited" : "paid"} the full <Amount value={invoice.amount} /> to the freelancer{fc.pull ? " to claim" : ""}.</>
                 )}
               </AlertDescription>
             </Alert>
@@ -294,7 +308,9 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
             <AlertDialogDescription>
               {hasAdvance ? (
                 <>
-                  Escrow will credit {formatToken(proj.reserveCredit)} back to the reserve and pay {formatToken(proj.toFreelancer)} to {invoice.freelancerName}. This can&apos;t be undone and ends dispute options.
+                  {fc.pull
+                    ? <>Escrow will repay the vault {formatToken(proj.reserveCredit)} (advance plus a {formatToken(proj.fee)} fee) and credit {formatToken(proj.toFreelancer)} to {invoice.freelancerName} to claim.</>
+                    : <>Escrow will credit {formatToken(proj.reserveCredit)} back to the reserve and pay {formatToken(proj.toFreelancer)} to {invoice.freelancerName}.</>} This can&apos;t be undone and ends dispute options.
                 </>
               ) : (
                 <>

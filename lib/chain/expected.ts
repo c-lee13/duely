@@ -7,7 +7,8 @@
 
 /** The on-chain evidence for one submitted transaction (checked by the lifecycle helpers). */
 export interface ExpectedReceipt {
-  contract: "invoiceAdvance" | "paymentToken"
+  /** "duelyVault" exists only under the v2 protocol. Under v2, "invoiceAdvance" is InvoiceAdvanceV2. */
+  contract: "invoiceAdvance" | "paymentToken" | "duelyVault"
   eventName: string
   /** Decoded event args that must match (addresses compare case-insensitively). */
   args: Record<string, string | bigint | boolean>
@@ -59,6 +60,28 @@ export const EXPECTED_EVENTS = {
     eventName: "ReserveWithdrawn",
     args: ["operator", "amount"],
   },
+  // v2 only: pull-payment claim on InvoiceAdvanceV2, and LP actions on DuelyVault.
+  claim: {
+    contract: "invoiceAdvance",
+    eventName: "ProceedsClaimed",
+    // The amount is whatever is credited at mining time, so it cannot be known (or checked) in advance.
+    args: ["recipient", "caller"],
+  },
+  vaultDeposit: {
+    contract: "duelyVault",
+    eventName: "Deposit",
+    args: ["sender", "owner", "assets"],
+  },
+  vaultWithdraw: {
+    contract: "duelyVault",
+    eventName: "Withdraw",
+    args: ["sender", "receiver", "owner", "assets"],
+  },
+  vaultRedeem: {
+    contract: "duelyVault",
+    eventName: "Withdraw",
+    args: ["sender", "receiver", "owner", "shares"],
+  },
   approve: {
     contract: "paymentToken",
     eventName: "Approval",
@@ -73,6 +96,14 @@ export const EXPECTED_EVENTS = {
   }
 >
 
+/** Operations that exist only under the v2 protocol (checked against the v2 ABIs, not the v1 one). */
+export const V2_ONLY_FUNCTIONS = [
+  "claim",
+  "vaultDeposit",
+  "vaultWithdraw",
+  "vaultRedeem",
+] as const satisfies readonly (keyof typeof EXPECTED_EVENTS)[]
+
 export type WriteFunctionName = keyof typeof EXPECTED_EVENTS
 
 export function isWriteFunctionName(value: string): value is WriteFunctionName {
@@ -84,12 +115,18 @@ export const ARG_KINDS = {
   client: "address",
   freelancer: "address",
   operator: "address",
+  recipient: "address",
+  caller: "address",
+  sender: "address",
+  receiver: "address",
   owner: "address",
   spender: "address",
   metadataHash: "bytes32",
   evaluationHash: "bytes32",
   invoiceId: "uint",
   amount: "uint",
+  assets: "uint",
+  shares: "uint",
   value: "uint",
   releasedToFreelancer: "bool",
 } as const

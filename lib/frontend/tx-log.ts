@@ -1,5 +1,5 @@
 import { activeDeployment } from "@/lib/chain/config"
-import type { Address, Bytes32, TxAction } from "./domain"
+import type { Address, Bytes32, UiTxAction } from "./domain"
 
 /**
  * This browser's record of the wallet transactions it submitted: label, hash, status. It exists so the UI can show a
@@ -15,7 +15,7 @@ export interface TxLogEntry {
   /** Transaction hash, once the wallet returned one. */
   hash: Bytes32
   label: string
-  action: TxAction | "approve"
+  action: UiTxAction
   invoiceId?: string
   from: Address
   createdAt: number

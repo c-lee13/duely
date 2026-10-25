@@ -40,6 +40,7 @@ import { blockedReasonsOf, isGithubEvaluation } from "@/lib/frontend/github-eval
 import { githubLinks, shortSha } from "@/lib/frontend/github-input"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES } from "@/lib/mocks/mock-repository"
 import { formatToken } from "@/lib/frontend/token"
+import { advanceFeeFor, fundingCopy } from "@/lib/frontend/protocol-copy"
 import { tryExplorerTxUrl } from "@/lib/chain/config"
 
 function Detail({ session, invoiceId }: { session: Session; invoiceId: string }) {
@@ -59,6 +60,7 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
 }
 
 function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void }) {
+  const fc = fundingCopy()
   const toast = useToast()
   const isMock = useRepository().mode === "mock"
   const sim = isMock ? " (simulated)" : ""
@@ -94,7 +96,7 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
     setConfirmAdvance(false)
     if (!r.ok) return toast({ tone: "error", title: "Advance request failed", description: r.error })
     if (r.value.status === "paid")
-      toast({ tone: "success", title: `Advance paid${sim}`, description: `${formatToken(eligibility.amount)} sent from the platform reserve.` })
+      toast({ tone: "success", title: `Advance paid${sim}`, description: `${formatToken(eligibility.amount)} sent from ${fc.source}.` })
     else if (r.value.status === "pending") toast({ tone: "info", title: "Advance submitted", description: "Waiting for on-chain confirmation. Nothing is paid until it confirms; this page updates by itself." })
     else if (r.value.status === "denied") toast({ tone: "warning", title: "Advance denied", description: r.value.reason })
     else toast({ tone: "error", title: "Advance transaction failed", description: r.value.reason })
@@ -244,7 +246,9 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
           <AlertDialogHeader>
             <AlertDialogTitle>Request your 90% advance?</AlertDialogTitle>
             <AlertDialogDescription>
-              The platform reserve will pay you {formatToken(eligibility.amount)} now. When the client approves, escrow refunds the reserve that amount and you receive the remaining {formatToken((BigInt(invoice.amount) - BigInt(eligibility.amount)).toString())}. If the client disputes, the advance isn&apos;t clawed back but the rest stays frozen. Simulated.
+              {fc.pull
+                ? <>The liquidity vault will pay you {formatToken(eligibility.amount)} now. When the client approves, escrow repays the vault that amount plus a {formatToken(advanceFeeFor(invoice.amount))} financing fee, and the remaining {formatToken((BigInt(invoice.amount) - BigInt(eligibility.amount) - BigInt(advanceFeeFor(invoice.amount))).toString())} is credited to you to claim.</>
+                : <>The platform reserve will pay you {formatToken(eligibility.amount)} now. When the client approves, escrow refunds the reserve that amount and you receive the remaining {formatToken((BigInt(invoice.amount) - BigInt(eligibility.amount)).toString())}.</>} If the client disputes, the advance isn&apos;t clawed back but the rest stays frozen. Simulated.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -275,6 +279,7 @@ function NextStep({
   firstBlocker?: string
   invoiceStatus: string
 }) {
+  const fc = fundingCopy()
   if (blocked)
     return (
       <Alert>
@@ -312,7 +317,7 @@ function NextStep({
         <AlertTitle>Next step: you can request an advance</AlertTitle>
         <AlertDescription className="space-y-2">
           <p>
-            The AI recommends a pass. Requesting is your choice: <Amount value={amount} /> (90%) would be paid from the platform reserve. Nothing is paid until you request it and it confirms.
+            The AI recommends a pass. Requesting is your choice: <Amount value={amount} /> (90%) would be paid from {fc.source}. Nothing is paid until you request it and it confirms.
           </p>
           <a href="#advance" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
             Go to advance request <ArrowDown className="size-3.5" aria-hidden />
@@ -341,6 +346,7 @@ function AdvanceCard(props: {
   reserveAvailable: string
   simulated: boolean
 }) {
+  const fc = fundingCopy()
   const paid = props.invoiceStatus === "Advanced" || props.invoiceStatus === "Settled" || props.invoiceStatus === "Disputed"
   const wasPaid = props.advanceAmount !== "0"
   return (
@@ -349,7 +355,7 @@ function AdvanceCard(props: {
         <CardTitle className="flex items-center gap-2">
           <Rocket className="size-4" aria-hidden /> Early advance
         </CardTitle>
-        <CardDescription>90% of the invoice, rounded down, paid from the platform reserve after a passing evaluation.</CardDescription>
+        <CardDescription>90% of the invoice, rounded down, paid from {fc.source} after a passing evaluation.{fc.pull ? " A 3% financing fee is taken from the settlement." : ""}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div className="flex items-baseline justify-between">
@@ -357,7 +363,7 @@ function AdvanceCard(props: {
           <Amount value={wasPaid ? props.advanceAmount : props.amount} className="text-lg" />
         </div>
         <div className="flex items-baseline justify-between">
-          <span className="text-muted-foreground">Reserve available</span>
+          <span className="text-muted-foreground">{fc.pull ? "Vault can advance now" : "Reserve available"}</span>
           <Amount value={props.reserveAvailable} />
         </div>
 

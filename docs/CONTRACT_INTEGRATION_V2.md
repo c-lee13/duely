@@ -29,7 +29,8 @@ The pooled-vault design and its risk review are in `docs/VAULT_IMPLEMENTATION_SP
 
 Roles (testnet MVP): admin = operator = pauser = `0x6e83F6Bb6758Ced46e60be88271D72C22B84482E` (one key, the
 deployer); evaluator = `0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb` (separate; the same address as V1's evaluator,
-so the **existing** `EVALUATOR_PRIVATE_KEY` signs V2 advances; no new key). Not suitable for production.
+so the same evaluator signer works for V2: no new wallet. The `EVALUATOR_PRIVATE_KEY` variable exists but is **empty** in
+`.env`/`.env.local`; the signer must be supplied out of band, server-side only). Not suitable for production.
 
 Parameters, identical in both contracts: financing fee **300 bps** of the invoice amount; advance **90%** of the
 invoice; vault utilization cap **80%** of NAV; per-invoice exposure cap **25%** of NAV.
@@ -37,12 +38,18 @@ invoice; vault utilization cap **80%** of NAV; per-invoice exposure cap **25%** 
 ### Environment variables for V2 (additive; V1 variables are not overwritten)
 
 ```bash
-# public (browser + server)
+# Next.js / the app (public; safe for the browser)
 NEXT_PUBLIC_V2_VAULT_ADDRESS=0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8
 NEXT_PUBLIC_V2_ESCROW_ADDRESS=0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96
 NEXT_PUBLIC_V2_TOKEN_ADDRESS=0x27b57a9D0b8d24EB97259c4E2279e45255e016f3
 NEXT_PUBLIC_V2_DEPLOY_BLOCK=9234793
+# Foundry (script/DeployV2.s.sol); the same two addresses, read by a different tool
+VAULT_ADDRESS=0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8
+ESCROW_ADDRESS=0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96
 ```
+
+Which file is read: Next.js uses `.env.local` over `.env`; Foundry and `npm run chain:*` read `.env` only. Keep the two files
+identical for shared variables (they currently are). There is no `PAUSER_ADDRESS` variable: the pauser is the operator.
 
 Reused unchanged: `NEXT_PUBLIC_XRPL_EVM_RPC_URL`, `NEXT_PUBLIC_XRPL_EVM_CHAIN_ID` (browser); `XRPL_EVM_RPC_URL`
 (server, secret); `EVALUATOR_PRIVATE_KEY` (server only, never `NEXT_PUBLIC_*`). `NEXT_PUBLIC_CONTRACT_ADDRESS`,
@@ -420,3 +427,29 @@ cast call 0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8 "escrow()(address)" --rpc-u
 cast call 0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96 "quoteAdvance(uint256)(uint256,uint256,uint256,uint256)" 1000000000000000000000 --rpc-url xrpl_evm_testnet
 # expected quote for 1,000 RLUSD: 900e18, 30e18, 930e18, 70e18
 ```
+
+---
+
+## 14. App integration (Track B)
+
+The Next.js app speaks V2 when `DUELY_DEPLOYMENT=v2` and `NEXT_PUBLIC_DUELY_DEPLOYMENT=v2` (the two must agree). V1
+(`dusd`, `rlusd`) is untouched and remains the default.
+
+| Concern | Where |
+|---|---|
+| `v2` deployment key (escrow in `invoiceAdvance.address`, `vault`, `protocol: "v2"`) | `lib/chain/deployments.ts` |
+| Protocol-aware `getInvoice` (8-field struct), V2 receipt verification, V2 revert decoding | `lib/chain/reads.ts`, `lifecycle.ts`, `writes.ts`, `expected.ts`, `protocol.ts` |
+| Vault reads/writes (`getVaultSnapshot`, `getLpPosition`, `depositToVault`, `withdrawFromVault`, `redeemFromVault`, `approveVaultAllowance`), claims (`getClaimable`, `claimProceeds`), `quoteAdvance`, idempotent `decodeV2Events` | `lib/chain/vault.ts` |
+| Advance availability = `vault.maxAdvanceNow()` (cash, 80% utilization, 25% per-invoice cap, pauses) | `lib/backend/chain-adapter.ts` |
+| `AdvancePaid` crash-recovery scan uses the V2 ABI | `lib/backend/chain-adapter.ts` |
+| Repository: `vault` (LP) and `claims` controls, V2 balances | `lib/frontend/api-repository.ts` |
+| UI: Vault page (live on v2, placeholder preview otherwise), claim card, V2 wording/projections | `components/duely/vault-live.tsx`, `claim-card.tsx`, `lib/frontend/protocol-copy.ts` |
+
+Behavior to know:
+- **Advances** are funded by the vault. 900 RLUSD needs at least 3,600 RLUSD of vault NAV (25% per-invoice cap).
+- **Settlement** repays the vault advance + 3% fee (930 on 1,000); the freelancer's remainder (70) and any client refund are
+  **claimable**, not wallet balances, until `claim` runs. The app shows them separately.
+- **Operator** no longer tops up a reserve; `depositReserve` is refused under v2. The operator resolves disputes only.
+- **Signers**: the backend evaluator key (`EVALUATOR_PRIVATE_KEY`, server-only) must be the V2 evaluator
+  `0x276a...5ECb`; any other key makes advances answer `503 INTEGRATION_UNAVAILABLE`. The operator uses MetaMask.
+- **Not changed**: V1 ABIs/artifacts, Solidity, the database schema (v2 actions are browser-log only).

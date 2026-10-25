@@ -21,8 +21,10 @@ import {
   tryExplorerTxUrl,
 } from "./config"
 import { ChainWriteError } from "./errors"
-import { ARG_KINDS, EXPECTED_EVENTS } from "./expected"
+import { ARG_KINDS, EXPECTED_EVENTS, V2_ONLY_FUNCTIONS } from "./expected"
 import { invoiceAdvanceAbi, mockUsdcAbi } from "./generated"
+import { duelyVaultAbi } from "./generated/duelyVaultAbi"
+import { invoiceAdvanceV2Abi } from "./generated/invoiceAdvanceV2Abi"
 import {
   decodeInvoiceAdvanceEvents,
   getInvoiceIdFromReceipt,
@@ -609,11 +611,14 @@ describe("event audit: ABI vs docs/CONTRACT_SPEC.md §6", () => {
   it("every expected-event argument exists on the real event, with a value kind we validate", () => {
     const tokenEvents = mockUsdcAbi.filter((x) => x.type === "event")
     for (const [fn, spec] of Object.entries(EXPECTED_EVENTS)) {
+      if ((V2_ONLY_FUNCTIONS as readonly string[]).includes(fn)) continue // covered by the v2 test below
       const source =
         spec.contract === "invoiceAdvance" ? abiEvents : tokenEvents
       const event = source.find((e) => e.name === spec.eventName)
       assert.ok(event, `${fn}: event ${spec.eventName} must exist in the ABI`)
-      const inputs = new Map(event.inputs.map((i) => [i.name, i.type]))
+      const inputs = new Map<string, string>(
+        event.inputs.map((i) => [i.name, i.type])
+      )
       for (const arg of spec.args) {
         assert.ok(
           inputs.has(arg),
@@ -628,6 +633,24 @@ describe("event audit: ABI vs docs/CONTRACT_SPEC.md §6", () => {
           bool: "bool",
         }[kind]
         assert.equal(type, okType, `${fn}.${arg}`)
+      }
+    }
+  })
+
+  it("v2-only expected events exist on the real V2 escrow / vault events with a validated value kind", () => {
+    const v2Events = invoiceAdvanceV2Abi.filter((x) => x.type === "event")
+    const vaultEvents = duelyVaultAbi.filter((x) => x.type === "event")
+    for (const fn of V2_ONLY_FUNCTIONS) {
+      const spec = EXPECTED_EVENTS[fn]
+      const source = spec.contract === "duelyVault" ? vaultEvents : v2Events
+      const event = source.find((e) => e.name === spec.eventName)
+      assert.ok(event, `${fn}: event ${spec.eventName} must exist in the ABI`)
+      const inputs = new Map(event.inputs.map((i) => [i.name, i.type]))
+      for (const arg of spec.args) {
+        assert.ok(inputs.has(arg), `${fn}: ${spec.eventName} has no argument ${arg}`)
+        const kind = ARG_KINDS[arg as keyof typeof ARG_KINDS]
+        const okType = { address: "address", bytes32: "bytes32", uint: "uint256", bool: "bool" }[kind]
+        assert.equal(inputs.get(arg), okType, `${fn}.${arg}`)
       }
     }
   })
@@ -682,7 +705,9 @@ describe("event audit: ABI vs docs/CONTRACT_SPEC.md §6", () => {
     ]
     assert.deepEqual(
       calls.map(([name]) => name).sort(),
-      Object.keys(EXPECTED_EVENTS).sort()
+      Object.keys(EXPECTED_EVENTS)
+        .filter((k) => !(V2_ONLY_FUNCTIONS as readonly string[]).includes(k)) // v2-only writes: vault.test.ts
+        .sort()
     )
     for (const [name, pending] of calls) {
       const submitted = await pending

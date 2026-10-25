@@ -1,18 +1,26 @@
-import { deployments as generated } from "./generated/deployments"
+import { deployments as generatedV1 } from "./generated/deployments"
+import { deploymentV2 } from "./generated/deploymentV2"
 
 /**
  * Deployment selection. One SDK, several payment-token deployments (InvoiceAdvance has an
  * immutable payment token, so each token needs its own contract). Selection is by configuration:
  *
- *   DUELY_DEPLOYMENT              server / scripts   "dusd" (default) | "rlusd"
+ *   DUELY_DEPLOYMENT              server / scripts   "dusd" (default) | "rlusd" | "v2"
  *   NEXT_PUBLIC_DUELY_DEPLOYMENT  browser bundle     same values; must agree with the server value
+ *
+ * "v2" is the vault-funded protocol (DuelyVault + InvoiceAdvanceV2, RLUSD). Its escrow lives in
+ * `invoiceAdvance.address` so scoping, explorer links and token display work unchanged; the
+ * `protocol` field tells the SDK which ABI and event set to use, and `vault` holds DuelyVault.
  *
  * Unknown keys, a server/browser disagreement and selecting a deployment that has no InvoiceAdvance
  * yet all throw `DeploymentConfigError`. Nothing ever falls back silently to another token.
  */
 
-export type DeploymentKey = "dusd" | "rlusd"
-export const DEPLOYMENT_KEYS: readonly DeploymentKey[] = ["dusd", "rlusd"]
+export type DeploymentKey = "dusd" | "rlusd" | "v2"
+export const DEPLOYMENT_KEYS: readonly DeploymentKey[] = ["dusd", "rlusd", "v2"]
+
+/** v1: operator-reserve InvoiceAdvance. v2: DuelyVault-funded InvoiceAdvanceV2 with pull payments. */
+export type DeploymentProtocol = "v1" | "v2"
 export const DEFAULT_DEPLOYMENT_KEY: DeploymentKey = "dusd"
 
 type Hex = `0x${string}`
@@ -37,6 +45,15 @@ export interface DeploymentRoles {
 
 export interface DeploymentInfo {
   key: DeploymentKey
+  protocol: DeploymentProtocol
+  /** DuelyVault (ERC-4626 LP vault). Present only for the v2 protocol. */
+  vault?: {
+    address: Hex
+    deployTxHash: Hex
+    deployBlock: number
+    shareSymbol: string
+    shareDecimals: number
+  }
   chainId: number
   network: string
   explorer: string
@@ -66,6 +83,46 @@ interface GeneratedEntry {
   key: string
   status: string
   token: DeploymentToken
+}
+
+/** The v2 manifest reshaped into the registry-entry form every other deployment uses. */
+const v2Entry = {
+  key: "v2",
+  status: "deployed",
+  chainId: deploymentV2.chainId,
+  network: deploymentV2.network,
+  explorer: deploymentV2.explorer,
+  sourceCommit: deploymentV2.sourceCommit,
+  protocol: "v2" as const,
+  invoiceAdvance: {
+    address: deploymentV2.contracts.invoiceAdvanceV2.address,
+    deployTxHash: deploymentV2.contracts.invoiceAdvanceV2.deployTxHash,
+    deployBlock: deploymentV2.contracts.invoiceAdvanceV2.deployBlock,
+  },
+  vault: {
+    address: deploymentV2.contracts.duelyVault.address,
+    deployTxHash: deploymentV2.contracts.duelyVault.deployTxHash,
+    deployBlock: deploymentV2.contracts.duelyVault.deployBlock,
+    shareSymbol: deploymentV2.contracts.duelyVault.shareToken.symbol,
+    shareDecimals: deploymentV2.contracts.duelyVault.shareToken.decimals,
+  },
+  token: {
+    address: deploymentV2.contracts.paymentToken.address,
+    name: deploymentV2.contracts.paymentToken.name,
+    symbol: deploymentV2.contracts.paymentToken.symbol,
+    decimals: deploymentV2.contracts.paymentToken.decimals,
+    isDemoToken: deploymentV2.contracts.paymentToken.isDemoToken,
+    kind: "external" as const,
+  },
+  roles: {
+    admin: deploymentV2.roles.admin,
+    operator: deploymentV2.roles.operator,
+    evaluator: deploymentV2.roles.evaluator,
+  },
+}
+
+function registryEntry(key: DeploymentKey): unknown {
+  return key === "v2" ? v2Entry : generatedV1[key]
 }
 
 function isDeployed(entry: GeneratedEntry): boolean {
@@ -107,7 +164,10 @@ export function deploymentFromEntry(
   key: DeploymentKey,
   entry: unknown
 ): DeploymentInfo {
-  const e = entry as GeneratedEntry & Omit<DeploymentInfo, "key" | "token">
+  const e = entry as GeneratedEntry &
+    Omit<DeploymentInfo, "key" | "token" | "protocol"> & {
+      protocol?: DeploymentProtocol
+    }
   if (!isDeployed(e)) {
     throw new DeploymentConfigError(
       "DEPLOYMENT_NOT_DEPLOYED",
@@ -115,21 +175,21 @@ export function deploymentFromEntry(
         `Deploy it and add its manifest, or select another deployment`
     )
   }
-  return { ...e, key, token: e.token }
+  return { ...e, key, protocol: e.protocol ?? "v1", token: e.token }
 }
 
 function toInfo(key: DeploymentKey): DeploymentInfo {
-  return deploymentFromEntry(key, generated[key])
+  return deploymentFromEntry(key, registryEntry(key))
 }
 
 /** Whether a deployment has an InvoiceAdvance contract (selectable) or is only registered. */
 export function isDeploymentAvailable(key: DeploymentKey): boolean {
-  return isDeployed(generated[key] as unknown as GeneratedEntry)
+  return isDeployed(registryEntry(key) as GeneratedEntry)
 }
 
 /** Registered token metadata, available even before an InvoiceAdvance exists. */
 export function getRegisteredToken(key: DeploymentKey): DeploymentToken {
-  return (generated[key] as unknown as GeneratedEntry).token
+  return (registryEntry(key) as GeneratedEntry).token
 }
 
 /** A specific deployment, regardless of configuration. Throws if it is not deployed. */

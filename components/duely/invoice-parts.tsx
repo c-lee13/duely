@@ -24,7 +24,8 @@ import type {
   TransactionRecord,
 } from "@/lib/frontend/domain"
 import { shortHash } from "@/lib/frontend/criteria-digest"
-import { advanceFor, formatToken, isZero, sub, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { advanceFor, formatToken, isZero, sub, sum, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { advanceFeeFor, fundingCopy, v2Active } from "@/lib/frontend/protocol-copy"
 import { tryExplorerTxUrl } from "@/lib/chain/config"
 import { useSession } from "@/hooks/use-duely"
 import { AddressChip, Amount, formatDate, OnchainStatusBadge, Pill, SimulatedTag, TxStatusBadge } from "./primitives"
@@ -40,6 +41,9 @@ const TX_LABEL: Record<TransactionRecord["action"], string> = {
   cancelInvoice: "Cancel invoice",
   withdrawReserve: "Withdraw from reserve",
   resolveDispute: "Resolve dispute",
+  claim: "Claim proceeds",
+  vaultDeposit: "Deposit to vault",
+  vaultWithdraw: "Withdraw from vault",
 }
 
 export function CriteriaList({ invoice }: { invoice: InvoiceDetail }) {
@@ -83,7 +87,10 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   const status = invoice.onchainStatus
   const hasAdvance = !isZero(invoice.advanceAmount)
   const advance = hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount)
-  const remainder = sub(invoice.amount, advance)
+  const fc = fundingCopy()
+  const pull = fc.pull
+  const fee = hasAdvance ? advanceFeeFor(invoice.amount) : "0"
+  const remainder = sub(sub(invoice.amount, advance), advanceFeeFor(invoice.amount))
   const pendingOf = (a: TransactionRecord["action"]) => transactions.some((t) => t.action === a && t.status === "pending")
 
   type Tone = "done" | "pending" | "todo" | "skipped" | "bad"
@@ -97,13 +104,13 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   })
 
   steps.push({
-    title: "Advance from platform reserve",
+    title: pull ? "Advance from the liquidity vault" : "Advance from platform reserve",
     detail: hasAdvance ? (
-      <><Amount value={invoice.advanceAmount} /> (90%) paid to the freelancer from the reserve.</>
+      <><Amount value={invoice.advanceAmount} /> (90%) paid to the freelancer from the {fc.short}.</>
     ) : status === "Settled" || status === "Disputed" ? (
       <>No advance was taken on this invoice.</>
     ) : (
-      <><Amount value={advance} /> (90%) is paid from the reserve only after a passing AI evaluation and the freelancer&apos;s explicit request.</>
+      <><Amount value={advance} /> (90%) is paid from the {fc.short} only after a passing AI evaluation and the freelancer&apos;s explicit request.</>
     ),
     tone: hasAdvance ? "done" : pendingOf("approveAdvance") ? "pending" : status === "Settled" || status === "Disputed" ? "skipped" : "todo",
     badge: hasAdvance ? "Paid" : pendingOf("approveAdvance") ? "Pending" : status === "Settled" || status === "Disputed" ? "Not taken" : "On request",
@@ -112,9 +119,13 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   steps.push({
     title: "Client approval",
     detail: hasAdvance ? (
-      <><Amount value={invoice.advanceAmount} /> of escrow is reallocated to replenish the reserve and the remaining <Amount value={remainder} /> goes to the freelancer.</>
+      pull ? (
+        <>Escrow repays the vault <Amount value={sum([invoice.advanceAmount, fee])} /> (the advance plus a <Amount value={fee} /> fee) and credits the remaining <Amount value={remainder} /> to the freelancer to claim.</>
+      ) : (
+        <><Amount value={invoice.advanceAmount} /> of escrow is reallocated to replenish the reserve and the remaining <Amount value={remainder} /> goes to the freelancer.</>
+      )
     ) : (
-      <>With no advance, escrow pays the full <Amount value={invoice.amount} /> to the freelancer.</>
+      <>With no advance, escrow {pull ? "credits" : "pays"} the full <Amount value={invoice.amount} /> to the freelancer{pull ? " to claim" : ""}.</>
     ),
     tone: status === "Settled" ? "done" : pendingOf("approveCompletion") ? "pending" : status === "Disputed" ? "bad" : "todo",
     badge: status === "Settled" ? "Settled" : pendingOf("approveCompletion") ? "Pending" : status === "Disputed" ? "Frozen" : "Awaiting client",
@@ -199,7 +210,9 @@ export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: Invoice
   const status = invoice.onchainStatus
   const advance = advanceFor(invoice.amount)
   const hasAdvance = !isZero(invoice.advanceAmount)
-  const remainder = sub(invoice.amount, invoice.advanceAmount)
+  const fc = fundingCopy()
+  const fee = hasAdvance ? advanceFeeFor(invoice.amount) : "0"
+  const remainder = sub(sub(invoice.amount, invoice.advanceAmount), fee)
 
   let explanation: string
   switch (status) {
@@ -207,14 +220,16 @@ export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: Invoice
       explanation = "Nothing is locked yet. Once funded, the full invoice amount sits in escrow."
       break
     case "Funded":
-      explanation = `If the freelancer requests an advance, ${formatToken(advance)} is paid from the platform reserve — escrow isn't touched. On approval without an advance, escrow pays the full ${formatToken(invoice.amount)}.`
+      explanation = `If the freelancer requests an advance, ${formatToken(advance)} is paid from ${fc.source} — escrow isn't touched. On approval without an advance, escrow ${fc.pull ? "credits" : "pays"} the full ${formatToken(invoice.amount)} to the freelancer${fc.pull ? " to claim" : ""}.`
       break
     case "Advanced":
-      explanation = `${formatToken(invoice.advanceAmount)} was paid from the reserve. On approval, escrow credits ${formatToken(invoice.advanceAmount)} back to the reserve and pays the remaining ${formatToken(remainder)} to the freelancer.`
+      explanation = fc.pull
+        ? `${formatToken(invoice.advanceAmount)} was paid from the vault. On approval, escrow repays the vault ${formatToken(sum([invoice.advanceAmount, fee]))} (the advance plus a ${formatToken(fee)} fee) and credits the remaining ${formatToken(remainder)} to the freelancer to claim.`
+        : `${formatToken(invoice.advanceAmount)} was paid from the reserve. On approval, escrow credits ${formatToken(invoice.advanceAmount)} back to the reserve and pays the remaining ${formatToken(remainder)} to the freelancer.`
       break
     case "Disputed":
       explanation = hasAdvance
-        ? `Settlement is frozen. The ${formatToken(invoice.advanceAmount)} advance is not clawed back and escrow stays locked; the platform carries that risk until manual resolution.`
+        ? `Settlement is frozen. The ${formatToken(invoice.advanceAmount)} advance is not clawed back and escrow stays locked; ${fc.pull ? "the vault's liquidity providers carry" : "the platform carries"} that risk until manual resolution.`
         : "Settlement is frozen and escrow stays locked until manual resolution. Nothing is refunded automatically."
       break
     case "Cancelled":
@@ -222,21 +237,23 @@ export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: Invoice
       break
     case "Settled":
       explanation = hasAdvance
-        ? `Escrow credited ${formatToken(invoice.reserveCredited)} to the reserve and paid ${formatToken(remainder)} to the freelancer.`
-        : `Escrow paid the full ${formatToken(invoice.amount)} to the freelancer.`
+        ? fc.pull
+          ? `Escrow repaid the vault ${formatToken(invoice.reserveCredited)} (advance plus fee) and credited ${formatToken(remainder)} to the freelancer, who claims it on their dashboard.`
+          : `Escrow credited ${formatToken(invoice.reserveCredited)} to the reserve and paid ${formatToken(remainder)} to the freelancer.`
+        : `Escrow ${fc.pull ? "credited" : "paid"} the full ${formatToken(invoice.amount)} to the freelancer${fc.pull ? ", who claims it on their dashboard" : ""}.`
   }
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Where the money is</CardTitle>
-        <CardDescription>Escrow and the platform reserve are separate balances. {tokenDisplay().simulated ? "Simulated demo tokens." : tokenNotice()}</CardDescription>
+        <CardDescription>Escrow and {fc.source} are separate balances. {tokenDisplay().simulated ? "Simulated demo tokens." : tokenNotice()}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
           <Bucket icon={Lock} label="Client escrow" value={invoice.escrowBalance} note="This invoice" />
-          <Bucket icon={Landmark} label="Platform reserve" value={reserveAvailable} note="Shared, all invoices" />
-          <Bucket icon={Banknote} label="Freelancer received" value={invoice.freelancerReceived} note="Advance + settlement" />
+          <Bucket icon={Landmark} label={fc.pull ? "Vault can advance now" : "Platform reserve"} value={reserveAvailable} note={fc.pull ? "Liquidity and risk limits applied" : "Shared, all invoices"} />
+          <Bucket icon={Banknote} label={fc.pull ? "Freelancer paid or claimable" : "Freelancer received"} value={invoice.freelancerReceived} note={fc.pull ? "Advance + remainder, net of fee" : "Advance + settlement"} />
         </div>
         <p className="rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">{explanation}</p>
       </CardContent>
@@ -587,7 +604,7 @@ export function ReserveNote() {
   return (
     <p className="flex items-start gap-2 text-xs text-muted-foreground">
       <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-      Advances are paid only from the platform-funded reserve, never from client escrow.
+      {v2Active() ? "Advances are paid only from the liquidity vault, never from client escrow." : "Advances are paid only from the platform-funded reserve, never from client escrow."}
     </p>
   )
 }

@@ -13,7 +13,8 @@ import path from "node:path"
  */
 const MIGRATIONS = path.resolve(process.cwd(), "supabase/migrations")
 
-export async function createDb(): Promise<PGlite> {
+/** `through` stops after that migration file (inclusive), so a test can create legacy rows before a later migration runs. */
+export async function createDb(through?: string): Promise<PGlite> {
   const db = new PGlite()
   await db.exec(`
     create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -39,10 +40,18 @@ export async function createDb(): Promise<PGlite> {
     grant select on storage.buckets to authenticated;
     grant execute on function auth.uid(), storage.foldername(text) to anon, authenticated, service_role;
   `)
-  for (const f of fs.readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()) {
+  for (const f of migrationFiles()) {
+    if (through && f > through) break
     await db.exec(fs.readFileSync(path.join(MIGRATIONS, f), "utf8"))
   }
   return db
+}
+
+export const migrationFiles = () => fs.readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql")).sort()
+
+/** Applies one migration file to an existing test database. */
+export async function applyMigration(db: PGlite, file: string): Promise<void> {
+  await db.exec(fs.readFileSync(path.join(MIGRATIONS, file), "utf8"))
 }
 
 export type Role = "anon" | "authenticated" | "service_role"

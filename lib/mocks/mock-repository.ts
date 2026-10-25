@@ -16,12 +16,14 @@ import type {
   Session,
   Submission,
   SubmitEvidenceInput,
+  SubmitGithubInput,
   TimelineEvent,
   TokenAmount,
   TransactionRecord,
   TxAction,
 } from "@/lib/frontend/domain"
 import { DomainError } from "@/lib/frontend/errors"
+import { checkCommitSha, checkRepositoryUrl } from "@/lib/frontend/github-input"
 import { getAdvanceEligibility } from "@/lib/frontend/eligibility"
 import type { DemoControls, DemoSettings, DuelyRepository } from "@/lib/frontend/repository"
 import { isZero, sum } from "@/lib/frontend/token"
@@ -362,6 +364,33 @@ export class MockDuelyRepository implements DuelyRepository {
     await delay(WRITE_DELAY_MS)
     const s = this.load()
     const submission = ledger.addSubmission(s, session.wallet, input, now())
+    s.simulatedOutcomes[submission.submissionId] = input.simulatedOutcome ?? "pass"
+    this.commit()
+    return clone(submission)
+  }
+
+  /** Simulated: nothing is fetched from GitHub. Same field rules as the real flow, and no money moves. */
+  async submitGithubRepository(input: SubmitGithubInput): Promise<Submission> {
+    const session = this.requireRole("freelancer")
+    const repo = checkRepositoryUrl(input.repositoryUrl)
+    if (!repo.ok) throw new DomainError("INVALID_INPUT", repo.message)
+    const sha = checkCommitSha(input.commitSha)
+    if (!sha.ok) throw new DomainError("INVALID_INPUT", sha.message)
+    const file = {
+      invoiceId: input.invoiceId,
+      fileName: "duely-github-submission.txt",
+      fileSize: 150,
+      mimeType: "text/plain",
+      note: input.note,
+    }
+    ledger.addSubmission(clone(this.load()), session.wallet, file, now()) // validate before the simulated delay
+    await delay(WRITE_DELAY_MS)
+    const s = this.load()
+    const submission = ledger.addSubmission(s, session.wallet, file, now())
+    submission.repositoryUrl = repo.value
+    submission.commitSha = sha.value
+    const event = [...s.timeline].reverse().find((e) => e.kind === "submitted" && e.invoiceId === input.invoiceId)
+    if (event) event.description = `Freelancer submitted GitHub repository ${repo.value.replace("https://github.com/", "")} at commit ${sha.value.slice(0, 7)} (simulated; nothing was fetched).`
     s.simulatedOutcomes[submission.submissionId] = input.simulatedOutcome ?? "pass"
     this.commit()
     return clone(submission)

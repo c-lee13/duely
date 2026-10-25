@@ -95,7 +95,18 @@ export interface EvaluatorInput {
   criteriaHash: Bytes32
   criteriaVersion: number
   criteria: EvaluationCriterionInput[]
-  submission: { id: string; fileName: string; mimeType: string; fileSize: number }
+  submission: {
+    id: string
+    fileName: string
+    mimeType: string
+    fileSize: number
+    /**
+     * Stored GitHub metadata, present only when the submission row has repository_url and/or commit_sha. These columns are
+     * authoritative: when present the evaluator reviews exactly this repository and commit and ignores the evidence file.
+     * Absent for file submissions (including the legacy declaration-file convention, which is read from `evidence`).
+     */
+    github?: { repositoryUrl: string | null; commitSha: string | null }
+  }
   /** Leading bytes of the stored evidence. Never logged. */
   evidence: Uint8Array
 }
@@ -115,8 +126,31 @@ export interface EvaluatorOutput {
     evidenceQuote?: string | null
     weight?: number
     points?: number
+    /** Source-code references (GitHub evaluations), already checked against the retrieved source. */
+    evidence?: EvidenceReference[]
   }>
   summary: string
+  /** What was evaluated, when it is not the uploaded file itself (GitHub evaluations). Stored with every criterion result. */
+  source?: EvaluationSource
+  /**
+   * Reasons this result must never be a Pass whatever its score (for example: the source retrieval was incomplete).
+   * Non-empty means the stored `passed` is false. An evaluator can only block a pass with this, never grant one.
+   */
+  passBlocked?: string[]
+}
+
+export type EvidenceReference = {
+  path: string
+  startLine: number
+  endLine: number
+  quote: string
+}
+
+export type EvaluationSource = {
+  kind: "github"
+  repository: string
+  /** The exact 40-hex commit that was reviewed. */
+  commitSha: string
 }
 
 /** Thrown by an evaluator that cannot read this kind of evidence. Reported as 422, distinct from an evaluator failure. */
@@ -184,6 +218,9 @@ export interface SubmissionData {
   mime_type: string
   note: string
   funding_verified_onchain: boolean
+  /** GitHub code submission (migration 9): canonical repository URL + full commit SHA, both or neither. null for file submissions. */
+  repository_url: string | null
+  commit_sha: string | null
   created_at: string
 }
 
@@ -207,6 +244,8 @@ export interface EvaluationData {
     evidenceQuote?: string | null
     weight?: number
     points?: number
+    evidence?: EvidenceReference[]
+    source?: EvaluationSource
   }> | null
   summary: string | null
   pass_rule: string

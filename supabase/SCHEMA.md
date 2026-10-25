@@ -45,7 +45,7 @@ unique per deployment. Users are identified through `user_wallets.address` ↔ `
 
 - **invoices**: chain ids, parties, `amount`, `criteria_hash` (bytes32), `criteria_version`, title/description/due date, creation tx hash, cached chain status.
 - **invoice_criteria**: `(invoice_uuid, position)` primary key, `criterion_key` (the canonical `id`), `text`, `mandatory`.
-- **submissions**: freelancer user + address, private `storage_path`, file name/size/type, note.
+- **submissions**: freelancer user + address, private `storage_path`, file name/size/type, note. Optional GitHub code submission (migration 9): `repository_url` (canonical `https://github.com/owner/repo`) + `commit_sha` (full lower-case 40-hex), both or neither, immutable like the rest of the row.
 - **evaluations**: submission, invoice, `criteria_hash`/`criteria_version` evaluated against, `model`, `prompt_version`, `state`, `score` 0..100, `passed`, `criteria_results` (ordered JSON array), `summary` (rationale), `pass_rule`, `simulated`, timestamps.
 - **advance_requests**: invoice, requester user/address, evaluation used, `status` (pending/paid/failed/denied), `amount`, `reason`, `idempotency_key`, `transaction_id`.
 - **transactions**: invoice, `chain_id`, `action` (createInvoice/fundInvoice/depositReserve/approveAdvance/approveWork/disputeInvoice), `status`, `tx_hash`, block number/hash/timestamp, log index, decoded `receipt`, `simulated`.

@@ -28,6 +28,7 @@ import type {
   Session,
   Submission,
   SubmitEvidenceInput,
+  SubmitGithubInput,
   TimelineEvent,
   TransactionRecord,
 } from "./domain"
@@ -57,7 +58,10 @@ function mapCode(code: string, status: number): DomainErrorCode {
     case "INVALID_PATH":
       return "INVALID_INPUT"
     case "EVIDENCE_NOT_EVALUABLE":
+    case "GITHUB_REJECTED": // repository not found / not public / commit missing: the freelancer can fix the input
       return "INVALID_INPUT"
+    case "GITHUB_UNAVAILABLE": // GitHub rate limit or outage
+    case "GITHUB_SUBMISSIONS_UNAVAILABLE": // not enabled / database update pending
     case "INTEGRATION_UNAVAILABLE":
     case "EVALUATOR_UNAVAILABLE":
     case "CHAIN_UNAVAILABLE":
@@ -298,6 +302,38 @@ export class ApiDuelyRepository implements DuelyRepository {
     } catch (e) {
       if (e instanceof EvidenceUploadError) throw new DomainError(mapCode(e.code, 400), e.message)
       throw e
+    }
+  }
+
+  async submitGithubRepository(input: SubmitGithubInput): Promise<Submission> {
+    await this.mine()
+    const invoiceUuid = await this.uuidFor(input.invoiceId)
+    const note = input.note.trim()
+    // The exact backend shape. The server re-validates the repository and commit with GitHub and stores only canonical values.
+    const r = await this.api<{
+      submissionId: string
+      fileName: string
+      fileSize: number
+      mimeType: string
+      createdAt: string
+      repositoryUrl: string | null
+      commitSha: string | null
+    }>("/api/submissions", {
+      method: "POST",
+      body: { type: "github", invoiceId: invoiceUuid, repositoryUrl: input.repositoryUrl, commitSha: input.commitSha, ...(note ? { note } : {}) },
+    })
+    this.emit() // open screens re-read the invoice, so the new submission appears
+    return {
+      submissionId: r.submissionId,
+      invoiceId: input.invoiceId,
+      fileName: r.fileName,
+      fileSize: r.fileSize,
+      mimeType: r.mimeType,
+      note,
+      storagePath: "",
+      createdAt: r.createdAt,
+      repositoryUrl: r.repositoryUrl ?? null,
+      commitSha: r.commitSha ?? null,
     }
   }
 

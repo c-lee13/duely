@@ -18,7 +18,7 @@ import {
 import { as } from "./db"
 
 const COLS =
-  "id, invoice_uuid, freelancer_user_id, storage_path, file_name, file_size::int as file_size, mime_type, funding_verified_onchain, created_at::text as created_at"
+  "id, invoice_uuid, freelancer_user_id, storage_path, file_name, file_size::int as file_size, mime_type, funding_verified_onchain, repository_url, commit_sha, created_at::text as created_at"
 
 /** EvidenceDb over the REAL schema (all migrations applied), run as the service_role database role. */
 export function createPgEvidenceDb(db: PGlite): EvidenceDb {
@@ -47,12 +47,15 @@ export function createPgEvidenceDb(db: PGlite): EvidenceDb {
     async getSubmission(id) {
       return (await q<SubmissionRecord>(`select ${COLS} from submissions where id = $1`, [id])).rows[0] ?? null
     },
+    async latestSubmission(invoiceId) {
+      return (await q<SubmissionRecord>(`select ${COLS} from submissions where invoice_uuid = $1 order by created_at desc, id desc limit 1`, [invoiceId])).rows[0] ?? null
+    },
     async insertSubmission(row) {
       try {
         const r = await q<SubmissionRecord>(
-          `insert into submissions (invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size, mime_type, note, funding_verified_onchain)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning ${COLS}`,
-          [row.invoice_uuid, row.freelancer_user_id, row.freelancer_address, row.storage_path, row.file_name, row.file_size, row.mime_type, row.note, row.funding_verified_onchain]
+          `insert into submissions (invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size, mime_type, note, funding_verified_onchain, repository_url, commit_sha)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning ${COLS}`,
+          [row.invoice_uuid, row.freelancer_user_id, row.freelancer_address, row.storage_path, row.file_name, row.file_size, row.mime_type, row.note, row.funding_verified_onchain, row.repository_url ?? null, row.commit_sha ?? null]
         )
         return r.rows[0]
       } catch (e) {
@@ -107,6 +110,16 @@ export class FakeObjectStore implements EvidenceObjectStore {
     if (!ALLOWED_MIME_TYPES.includes(contentType)) throw new Error("bucket: mime type not supported")
     t.used = true
     this.objects.set(t.path, { bytes, mime: contentType, size: declaredSize })
+  }
+
+  /** Server-side create-only write (what the Supabase adapter does with the service role). Records the calls for assertions. */
+  puts: Array<{ path: string; mime: string; size: number }> = []
+  failPut = false
+  async put(path: string, bytes: Uint8Array, mimeType: string) {
+    if (this.failPut) throw new Error("storage unavailable")
+    if (this.objects.has(path)) throw new Error("object already exists (no upsert)")
+    this.puts.push({ path, mime: mimeType, size: bytes.length })
+    this.objects.set(path, { bytes, mime: mimeType, size: bytes.length })
   }
 
   /** Test-only: places an object bypassing the bucket's limits (models a bug or a policy gap). */

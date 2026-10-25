@@ -27,6 +27,9 @@ function validateOutput(out: EvaluatorOutput, criteria: Array<{ text: string; ma
     throw new Error("criterion results do not match the frozen criteria")
   }
   if (!out.summary || !out.model || !out.promptVersion) throw new Error("incomplete evaluator output")
+  if (out.passBlocked !== undefined && (!Array.isArray(out.passBlocked) || out.passBlocked.some((r) => typeof r !== "string"))) {
+    throw new Error("invalid pass-block reasons")
+  }
 }
 
 export interface EvaluateResult {
@@ -63,7 +66,13 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
 
   const criteria = await deps.db.getCriteria(invoice.id)
   if (criteria.length !== invoice.criteria_count) throw new ApiError("CRITERIA_INCOMPLETE", "This invoice's acceptance criteria aren't fully recorded.")
-  const evidence = await deps.objects.readPrefix(submission.storage_path, EVALUATION_EVIDENCE_BYTES)
+  // A GitHub submission carries its repository and commit in the database; the evaluator uses those and never the evidence file,
+  // so the file is not read (and its absence is not an error). File submissions read the stored object as before.
+  const github = submission.repository_url !== null || submission.commit_sha !== null
+  if (github && deps.evaluator.mode === "demo") {
+    throw new ApiError("EVIDENCE_NOT_EVALUABLE", "The development evaluator can't review GitHub submissions.")
+  }
+  const evidence = github ? new Uint8Array(0) : await deps.objects.readPrefix(submission.storage_path, EVALUATION_EVIDENCE_BYTES)
   if (!evidence) throw new ApiError("UPLOAD_NOT_FOUND", "The evidence file for this submission couldn't be found.")
 
   let running: EvaluationData
@@ -93,7 +102,13 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
       criteriaHash: invoice.criteria_hash as Bytes32,
       criteriaVersion: invoice.criteria_version,
       criteria: criteria.map((c) => ({ id: c.criterion_key, text: c.text, mandatory: c.mandatory })),
-      submission: { id: submission.id, fileName: submission.file_name, mimeType: submission.mime_type, fileSize: submission.file_size },
+      submission: {
+        id: submission.id,
+        fileName: submission.file_name,
+        mimeType: submission.mime_type,
+        fileSize: submission.file_size,
+        ...(github ? { github: { repositoryUrl: submission.repository_url, commitSha: submission.commit_sha } } : {}),
+      },
       evidence,
     })
     validateOutput(out, criteria)
@@ -109,13 +124,17 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
       ...(r.evidenceQuote !== undefined ? { evidenceQuote: r.evidenceQuote } : {}),
       ...(r.weight !== undefined ? { weight: r.weight } : {}),
       ...(r.points !== undefined ? { points: r.points } : {}),
+      // Source-code references and what was reviewed (GitHub evaluations); absent for text evidence.
+      ...(r.evidence ? { evidence: r.evidence } : {}),
+      ...(out.source ? { source: out.source } : {}),
     }))
     const final = await deps.db.finalizeEvaluation(running.id, {
       model: out.model,
       prompt_version: out.promptVersion,
       simulated: out.simulated,
       score: out.score,
-      passed: decidePassed(out.score, results),
+      // An evaluator may veto a pass (incomplete source) but can never create one: the server rule must also hold.
+      passed: !(out.passBlocked && out.passBlocked.length > 0) && decidePassed(out.score, results),
       criteria_results: results,
       summary: out.summary,
     })

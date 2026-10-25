@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useParams } from "next/navigation"
-import { AlertOctagon, ArrowDown, ArrowLeft, CheckCircle2, Circle, FileText, FileUp, Loader2, Rocket, RotateCcw, Upload, X, XCircle } from "lucide-react"
+import { AlertOctagon, ArrowDown, ArrowLeft, CheckCircle2, ExternalLink, FileText, FileUp, GitBranch, Loader2, Rocket, RotateCcw, Upload, X, XCircle } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -17,6 +17,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { GithubEvaluationPanel } from "@/components/duely/github-evaluation"
+import { CriteriaChecklist, GithubSubmissionForm } from "@/components/duely/github-submission-form"
 import { RoleGate } from "@/components/duely/role-gate"
 import { useToast } from "@/components/duely/toast"
 import { CriteriaList, EvaluationPanel, FundsBreakdown, InvoiceHeaderCard, PaymentFlow, Timeline, TransactionList } from "@/components/duely/invoice-parts"
@@ -34,6 +36,8 @@ import {
 import { useAction, useInvoiceBundle, useRepository } from "@/hooks/use-duely"
 import type { AcceptanceCriterion, InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canSubmitEvidence, evaluationFor, getAdvanceEligibility } from "@/lib/frontend/eligibility"
+import { blockedReasonsOf, isGithubEvaluation } from "@/lib/frontend/github-evaluation"
+import { githubLinks, shortSha } from "@/lib/frontend/github-input"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES } from "@/lib/mocks/mock-repository"
 import { formatToken } from "@/lib/frontend/token"
 
@@ -58,6 +62,7 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
   const isMock = useRepository().mode === "mock"
   const { invoice, submissions, evaluations, advanceRequests, timeline, transactions, reserveAvailable } = bundle
   const latest = submissions[0]
+  const latestGithub = latest ? githubLinks(latest.repositoryUrl, latest.commitSha) : null
   const latestEval = evaluationFor(latest, evaluations)
   const baseEligibility = getAdvanceEligibility({ invoice, submissions, evaluations, advanceRequests, reserveAvailable })
   // Live mode without a chain read: funding and reserve are unknown. Don't show cache- or placeholder-based verdicts
@@ -90,6 +95,17 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
     else if (r.value.status === "denied") toast({ tone: "warning", title: "Advance denied", description: r.value.reason })
     else toast({ tone: "error", title: "Advance transaction failed", description: r.value.reason })
   }
+
+  const nextStepFor = (e: { passed: boolean; summary?: string }) => (
+    <NextStep
+      blocked={!e.passed && blockedReasonsOf(e.summary ?? "").length > 0}
+      passed={e.passed}
+      eligible={eligibility.eligible}
+      amount={eligibility.amount}
+      firstBlocker={eligibility.blockers[0]?.message}
+      invoiceStatus={invoice.onchainStatus}
+    />
+  )
 
   const showUpload = canSubmitEvidence(invoice.onchainStatus)
   const passed = latestEval?.state === "completed" ? latestEval.passed : undefined
@@ -125,29 +141,44 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
                 <CardDescription>Only your latest submission can authorize an advance.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
-                <p className="font-medium">{latest.fileName}</p>
-                <p className="text-muted-foreground">
-                  {formatBytes(latest.fileSize)} · {formatDate(latest.createdAt, true)}
-                </p>
+                {latestGithub ? (
+                  <>
+                    <p className="flex items-center gap-2 font-medium">
+                      <GitBranch className="size-4 shrink-0" aria-hidden /> GitHub repository
+                    </p>
+                    <p className="break-all">
+                      <a href={latestGithub.repo} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
+                        {latestGithub.label} <ExternalLink className="size-3.5" aria-hidden />
+                        <span className="sr-only">(opens GitHub in a new tab)</span>
+                      </a>
+                    </p>
+                    <p className="text-muted-foreground">
+                      Commit{" "}
+                      <a href={latestGithub.commit} target="_blank" rel="noopener noreferrer" className="font-mono text-foreground underline-offset-2 hover:underline" title={latest.commitSha ?? undefined}>
+                        {shortSha(latest.commitSha ?? "")}
+                      </a>{" "}
+                      · {formatDate(latest.createdAt, true)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Submitted, not paid. Reviewed as read-only text at this exact commit.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">{latest.fileName}</p>
+                    <p className="text-muted-foreground">
+                      {formatBytes(latest.fileSize)} · {formatDate(latest.createdAt, true)}
+                    </p>
+                  </>
+                )}
                 {latest.note && <p className="pt-2">“{latest.note}”</p>}
               </CardContent>
             </Card>
           )}
 
-          <EvaluationPanel
-            evaluation={latestEval}
-            nextStep={
-              latestEval?.state === "completed" ? (
-                <NextStep
-                  passed={latestEval.passed}
-                  eligible={eligibility.eligible}
-                  amount={eligibility.amount}
-                  firstBlocker={eligibility.blockers[0]?.message}
-                  invoiceStatus={invoice.onchainStatus}
-                />
-              ) : undefined
-            }
-          />
+          {isGithubEvaluation(latestEval) ? (
+            <GithubEvaluationPanel evaluation={latestEval} nextStep={nextStepFor(latestEval)} />
+          ) : (
+            <EvaluationPanel evaluation={latestEval} nextStep={latestEval?.state === "completed" ? nextStepFor(latestEval) : undefined} />
+          )}
           {latestEval?.state === "error" && (
             <Button variant="outline" onClick={() => retryEval.run()} disabled={retryEval.pending}>
               <RotateCcw /> {retryEval.pending ? "Evaluating…" : "Run evaluation again"}
@@ -224,18 +255,31 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
 }
 
 function NextStep({
+  blocked,
   passed,
   eligible,
   amount,
   firstBlocker,
   invoiceStatus,
 }: {
+  /** Automatic approval was blocked because the source was only partly reviewed: not a verdict on the work itself. */
+  blocked?: boolean
   passed: boolean
   eligible: boolean
   amount: string
   firstBlocker?: string
   invoiceStatus: string
 }) {
+  if (blocked)
+    return (
+      <Alert>
+        <AlertOctagon />
+        <AlertTitle>Next step: this needs a person&apos;s review</AlertTitle>
+        <AlertDescription>
+          Automatic approval was blocked because only part of your source could be reviewed. That doesn&apos;t necessarily mean the work falls short. No advance is available until a later submission passes.
+        </AlertDescription>
+      </Alert>
+    )
   if (!passed)
     return (
       <Alert variant="destructive">
@@ -359,6 +403,7 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
   const [dragging, setDragging] = React.useState(false)
   const [phase, setPhase] = React.useState<"idle" | "uploading" | "evaluating">("idle")
   const [done, setDone] = React.useState<{ fileName: string } | null>(null)
+  const [kind, setKind] = React.useState<"file" | "github">("file")
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   const submit = useAction(async (repo) => {
@@ -416,14 +461,35 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
           <Upload className="size-4" aria-hidden /> {hasPrevious ? "Submit new evidence" : "Submit evidence"}
         </CardTitle>
         <CardDescription>
-          Upload proof that the work meets the criteria.{" "}
-          {mock
-            ? "In the demo the file is not actually uploaded; only its name and size are used."
-            : "The file is stored privately and only you and the client can open it."}
+          Show that the work meets the criteria: upload a file, or point to a GitHub repository.{" "}
+          {kind === "file" &&
+            (mock
+              ? "In the demo the file is not actually uploaded; only its name and size are used."
+              : "The file is stored privately and only you and the client can open it.")}
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="space-y-4">
+      <CardContent className="space-y-4">
+        <div role="group" aria-label="Submission type" className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          {([["file", "File upload", Upload], ["github", "GitHub repository", GitBranch]] as const).map(([k, label, Icon]) => (
+            <Button
+              key={k}
+              type="button"
+              size="lg"
+              variant={kind === k ? "default" : "ghost"}
+              aria-pressed={kind === k}
+              onClick={() => setKind(k)}
+              className="h-auto min-h-10 min-w-0 whitespace-normal py-1.5 leading-tight"
+            >
+              <Icon aria-hidden /> <span>{label}</span>
+            </Button>
+          ))}
+        </div>
+
+        {/* Both forms stay mounted so switching never discards a half-filled form or an in-flight request. */}
+        <div hidden={kind !== "github"}>
+          <GithubSubmissionForm invoiceId={invoiceId} disabled={disabled} criteria={criteria} />
+        </div>
+        <form onSubmit={onSubmit} className="space-y-4" hidden={kind !== "file"}>
           <div
             onDragOver={(e) => {
               e.preventDefault()
@@ -478,21 +544,7 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
             </p>
           )}
 
-          <section aria-label="Acceptance criteria checklist" className="space-y-2">
-            <p className="text-sm font-medium">The AI will check your evidence against these criteria</p>
-            <ol className="space-y-1.5">
-              {criteria.map((c) => (
-                <li key={c.id} className="flex items-start gap-2 text-sm">
-                  <Circle className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span className="min-w-0 flex-1">{c.text}</span>
-                  <Pill tone={c.mandatory ? "info" : "neutral"}>{c.mandatory ? "Mandatory" : "Optional"}</Pill>
-                </li>
-              ))}
-            </ol>
-            <p className="text-xs text-muted-foreground">
-              The AI only recommends whether the work satisfies these criteria. It does not decide payment.
-            </p>
-          </section>
+          <CriteriaChecklist criteria={criteria} />
 
           <div className="space-y-1.5">
             <Label htmlFor="note">Note for the reviewer (optional)</Label>

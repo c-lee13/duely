@@ -259,6 +259,9 @@ export async function getInvoiceDetail(deps: BackendDeps, input: { userId: strin
       mimeType: s.mime_type,
       createdAt: s.created_at,
       fundingVerifiedOnchain: s.funding_verified_onchain,
+      // GitHub code submissions: the canonical values the server stored (public repository data). null for file submissions.
+      repositoryUrl: s.repository_url,
+      commitSha: s.commit_sha,
     })),
     evaluations: evaluations.map(toEvaluationView),
     advanceRequests: advances.map((a) => ({ requestId: a.id, status: a.status, amount: a.amount, reason: a.reason, txHash: a.tx_hash, createdAt: a.created_at })),

@@ -1,4 +1,5 @@
 import type {
+  Address,
   AdvanceRequestResult,
   CreateInvoiceInput,
   DemoRole,
@@ -57,6 +58,19 @@ export interface DuelyRepository {
 
   /** Present only in mock mode. Never authorizes anything in API mode. */
   readonly demo?: DemoControls
+
+  /** Present only in API (live) mode. The view role is a UI preference; the server authorizes every request. */
+  readonly live?: LiveControls
+}
+
+export interface LiveControls {
+  /** Who the server says is signed in, and their VERIFIED wallets. Never read from browser storage. */
+  getAuth(): Promise<{ authenticated: boolean; wallets: Address[] }>
+  /** Wallet sign-in: server challenge, signature, session cookie. */
+  signIn(): Promise<void>
+  signOut(): Promise<void>
+  /** Which dashboard to show. Grants nothing: access is decided per invoice on the server. */
+  setViewRole(role: DemoRole): void
 }
 
 export interface DemoSettings {

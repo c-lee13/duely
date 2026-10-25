@@ -31,7 +31,7 @@ import {
   SimulatedTag,
   SubmissionStatusBadge,
 } from "@/components/duely/primitives"
-import { useAction, useInvoiceBundle } from "@/hooks/use-duely"
+import { useAction, useInvoiceBundle, useRepository } from "@/hooks/use-duely"
 import type { AcceptanceCriterion, InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canSubmitEvidence, evaluationFor, getAdvanceEligibility } from "@/lib/frontend/eligibility"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES } from "@/lib/mocks/mock-repository"
@@ -55,10 +55,24 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
 
 function Body({ bundle }: { bundle: InvoiceBundle }) {
   const toast = useToast()
+  const isMock = useRepository().mode === "mock"
   const { invoice, submissions, evaluations, advanceRequests, timeline, transactions, reserveAvailable } = bundle
   const latest = submissions[0]
   const latestEval = evaluationFor(latest, evaluations)
-  const eligibility = getAdvanceEligibility({ invoice, submissions, evaluations, advanceRequests, reserveAvailable })
+  const baseEligibility = getAdvanceEligibility({ invoice, submissions, evaluations, advanceRequests, reserveAvailable })
+  // Live mode without a chain read: funding and reserve are unknown. Don't show cache- or placeholder-based verdicts
+  // ("reserve has 0"); say plainly that an advance can't be verified or paid yet.
+  const eligibility =
+    bundle.chainVerified === false
+      ? {
+          ...baseEligibility,
+          eligible: false,
+          blockers: [
+            ...baseEligibility.blockers.filter((b) => !["INSUFFICIENT_RESERVE", "NOT_FUNDED"].includes(b.code)),
+            { code: "CHAIN_UNVERIFIED" as const, message: "The blockchain isn't connected, so on-chain funding and the platform reserve can't be verified. An advance can't be requested yet." },
+          ],
+        }
+      : baseEligibility
   const [confirmAdvance, setConfirmAdvance] = React.useState(false)
 
   const retryEval = useAction((repo) => repo.requestEvaluation(latest!.submissionId))
@@ -72,6 +86,7 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
     if (!r.ok) return toast({ tone: "error", title: "Advance request failed", description: r.error })
     if (r.value.status === "paid")
       toast({ tone: "success", title: "Advance paid (simulated)", description: `${formatToken(eligibility.amount)} sent from the platform reserve.` })
+    else if (r.value.status === "pending") toast({ tone: "info", title: "Advance submitted", description: "Waiting for on-chain confirmation. Nothing is paid until it confirms." })
     else if (r.value.status === "denied") toast({ tone: "warning", title: "Advance denied", description: r.value.reason })
     else toast({ tone: "error", title: "Advance transaction failed", description: r.value.reason })
   }
@@ -144,7 +159,7 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
               <AlertDescription className="space-y-2">
                 <p>This submission hasn&apos;t been evaluated.</p>
                 <Button size="sm" onClick={() => retryEval.run()} disabled={retryEval.pending}>
-                  {retryEval.pending ? "Evaluating…" : "Run simulated evaluation"}
+                  {retryEval.pending ? "Evaluating…" : isMock ? "Run simulated evaluation" : "Request evaluation"}
                 </Button>
               </AlertDescription>
             </Alert>
@@ -336,6 +351,7 @@ function AdvanceCard(props: {
 
 function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceId: string; hasPrevious: boolean; disabled: boolean; criteria: AcceptanceCriterion[] }) {
   const toast = useToast()
+  const mock = useRepository().mode === "mock"
   const [file, setFile] = React.useState<File | null>(null)
   const [note, setNote] = React.useState("")
   const [outcome, setOutcome] = React.useState<"pass" | "fail">("pass")
@@ -354,9 +370,11 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
       fileSize: file.size,
       mimeType: file.type,
       note,
+      file,
       simulatedOutcome: outcome,
     })
-    // Evaluation failures are visible and retryable on the evaluation panel.
+    // Evaluation failures are visible and retryable on the evaluation panel (live mode: the server may answer
+    // "evaluation unavailable" when no evaluator is configured).
     setPhase("evaluating")
     await repo.requestEvaluation(sub.submissionId).catch((e) => {
       toast({ tone: "error", title: "Evaluation didn't finish", description: e instanceof Error ? e.message : undefined })
@@ -383,7 +401,11 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
       setDone({ fileName: file.name })
       setFile(null)
       setNote("")
-      toast({ tone: "success", title: "Evidence submitted (simulated upload)", description: "Simulated AI evaluation finished." })
+      toast(
+        mock
+          ? { tone: "success", title: "Evidence submitted (simulated upload)", description: "Simulated AI evaluation finished." }
+          : { tone: "success", title: "Evidence uploaded", description: "Stored privately and recorded." }
+      )
     }
   }
 
@@ -394,7 +416,10 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
           <Upload className="size-4" aria-hidden /> {hasPrevious ? "Submit new evidence" : "Submit evidence"}
         </CardTitle>
         <CardDescription>
-          Upload proof that the work meets the criteria. In the demo the file is not actually uploaded; only its name and size are used.
+          Upload proof that the work meets the criteria.{" "}
+          {mock
+            ? "In the demo the file is not actually uploaded; only its name and size are used."
+            : "The file is stored privately and only you and the client can open it."}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -474,6 +499,7 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
             <Textarea id="note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Point to where each criterion is met" />
           </div>
 
+          {mock && (
           <fieldset className="space-y-2 rounded-lg border border-dashed border-warning/50 p-3">
             <legend className="flex items-center gap-1.5 px-1 text-xs font-medium">
               Demo only <SimulatedTag>Simulated evaluator</SimulatedTag>
@@ -488,6 +514,7 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
               ))}
             </div>
           </fieldset>
+          )}
 
           {submit.error && (
             <Alert variant="destructive">
@@ -500,15 +527,19 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
           {done && !submit.pending && (
             <Alert role="status">
               <CheckCircle2 />
-              <AlertTitle>Evidence submitted (simulated)</AlertTitle>
-              <AlertDescription>{done.fileName} was submitted and the simulated AI evaluation finished. See the result below.</AlertDescription>
+              <AlertTitle>{mock ? "Evidence submitted (simulated)" : "Evidence uploaded"}</AlertTitle>
+              <AlertDescription>
+                {mock
+                  ? `${done.fileName} was submitted and the simulated AI evaluation finished. See the result below.`
+                  : `${done.fileName} was uploaded and recorded. Any evaluation appears below.`}
+              </AlertDescription>
             </Alert>
           )}
 
           <Button type="submit" size="lg" className="w-full sm:w-auto" disabled={disabled || submit.pending}>
             {submit.pending ? (
               <>
-                <Loader2 className="animate-spin" /> {phase === "evaluating" ? "Evaluating…" : "Uploading…"}
+                <Loader2 className="animate-spin" /> {phase === "evaluating" ? "Evaluating…" : mock ? "Uploading…" : "Uploading securely…"}
               </>
             ) : disabled ? (
               "Evaluation in progress…"

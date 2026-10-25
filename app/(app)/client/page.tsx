@@ -79,6 +79,8 @@ function Dashboard({ session }: { session: Session }) {
   const list = invoices.data ?? []
   const count = (st: OnchainInvoiceStatus) => list.filter((i) => i.onchainStatus === st).length
   const locked = sum(list.map((i) => i.escrowBalance))
+  // Live mode, chain not read: escrow figures are unknown, so none is shown (never a 0 that reads as fact).
+  const unverified = list.some((i) => i.financialStatusVerified === false)
   const active = list.filter((i) => i.onchainStatus !== "Settled")
   // Evidence is in and the invoice is still open for approve/dispute.
   const pending = list.filter(
@@ -120,11 +122,17 @@ function Dashboard({ session }: { session: Session }) {
                     {simulated && <SimulatedTag className="ml-1" />}
                   </p>
                   <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums sm:text-5xl">
-                    <Amount value={locked} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />
+                    {unverified ? (
+                      <span className="text-3xl">Not connected</span>
+                    ) : (
+                      <Amount value={locked} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />
+                    )}
                   </p>
                   <p className="mt-1 max-w-sm text-xs text-navy-foreground/70">
-                    Held by the contract for open invoices. Not available to spend until you approve or the invoice
-                    settles. {simulated && "DEMO tokens have no real value."}
+                    {unverified
+                      ? "Escrow is read from the blockchain, which isn't connected yet, so no escrow balance is shown."
+                      : "Held by the contract for open invoices. Not available to spend until you approve or the invoice settles."}{" "}
+                    {simulated && "DEMO tokens have no real value."}
                   </p>
                 </div>
                 <ButtonLink
@@ -150,6 +158,7 @@ function Dashboard({ session }: { session: Session }) {
 
           <section aria-label="Invoice status summary">
             <h2 className="mb-2 text-sm font-semibold">Invoice status</h2>
+            {unverified && <p className="mb-2 text-xs text-muted-foreground">Counts use saved invoice records, not on-chain state.</p>}
             <ul className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-5 sm:overflow-visible sm:px-0">
               {STATUS_ORDER.map((st) => (
                 <li key={st} className="min-w-28 flex-1 snap-start">

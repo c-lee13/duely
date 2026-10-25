@@ -82,6 +82,13 @@ export interface InvoiceDetail extends InvoiceRecord {
   freelancerReceived: TokenAmount
   /** Escrow credited back to the reserve at settlement (equals actual advance). */
   reserveCredited: TokenAmount
+  /**
+   * Live (API) mode only. False when `onchainStatus` is a database cache that was NOT read from the chain: the
+   * escrow/received figures are then 0 placeholders, not facts. Undefined in mock mode.
+   */
+  financialStatusVerified?: boolean
+  /** Live mode only: a dev test fixture that does not exist on any blockchain. */
+  isTestFixture?: boolean
 }
 
 export interface Submission {
@@ -184,6 +191,8 @@ export interface InvoiceBundle {
   timeline: TimelineEvent[] // oldest first
   transactions: TransactionRecord[] // newest first
   reserveAvailable: TokenAmount
+  /** Live mode only: false when no chain read happened, so reserve/funding cannot be verified. Undefined in mock mode. */
+  chainVerified?: boolean
 }
 
 export interface PlatformBalances {
@@ -214,6 +223,8 @@ export interface SubmitEvidenceInput {
   fileSize: number
   mimeType: string
   note: string
+  /** The chosen file. Ignored by the mock adapter; the API adapter uploads it to private storage. */
+  file?: File
   /** Mock-only: which deterministic outcome the simulated evaluator returns. */
   simulatedOutcome?: "pass" | "fail"
 }

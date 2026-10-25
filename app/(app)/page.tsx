@@ -3,7 +3,7 @@
 import { ArrowRight, Banknote, Briefcase, Building2, FileCheck2, Landmark, Lock, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useSession } from "@/hooks/use-duely"
+import { useRepository, useSession } from "@/hooks/use-duely"
 import type { DemoRole } from "@/lib/frontend/domain"
 import { useSwitchRole } from "@/components/duely/app-shell"
 
@@ -41,6 +41,7 @@ const STEPS = [
 export default function WelcomePage() {
   const session = useSession()
   const switchRole = useSwitchRole()
+  const live = useRepository().mode === "api"
 
   return (
     <div className="space-y-12">
@@ -54,16 +55,18 @@ export default function WelcomePage() {
           a platform-funded reserve. The AI recommends; it never moves money.
         </p>
         <p className="max-w-2xl text-sm text-muted-foreground">
-          This is a clickable demo. Wallets, transactions and AI evaluations are simulated, and DEMO tokens have no value.
+          {live
+            ? "Live data mode: invoices, evidence and evaluations are stored in Supabase. Blockchain payments aren't connected yet."
+            : "This is a clickable demo. Wallets, transactions and AI evaluations are simulated, and DEMO tokens have no value."}
         </p>
       </section>
 
       <section aria-labelledby="pick-role" className="space-y-4">
         <h2 id="pick-role" className="text-lg font-semibold">
-          Choose a role to start the demo
+          {live ? "Choose a view" : "Choose a role to start the demo"}
         </h2>
-        <div className="grid gap-4 md:grid-cols-3">
-          {ROLES.map(({ role, title, icon: Icon, text, cta }) => (
+        <div className={live ? "grid gap-4 md:grid-cols-2" : "grid gap-4 md:grid-cols-3"}>
+          {ROLES.filter((r) => !live || r.role !== "platform").map(({ role, title, icon: Icon, text, cta }) => (
             <Card key={role} className={session.data?.role === role ? "ring-2 ring-primary" : undefined}>
               <CardHeader>
                 <span className="mb-1 flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -81,7 +84,9 @@ export default function WelcomePage() {
           ))}
         </div>
         <p className="text-xs text-muted-foreground">
-          You can switch roles any time from the header. The switcher is a demo convenience, not real sign-in.
+          {live
+            ? "The view only chooses which dashboard to show. What you can open is decided by your verified wallet on the server."
+            : "You can switch roles any time from the header. The switcher is a demo convenience, not real sign-in."}
         </p>
       </section>
 

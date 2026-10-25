@@ -29,6 +29,7 @@ export type AdvanceBlockerCode =
   | "STALE_EVALUATION"
   | "INSUFFICIENT_RESERVE"
   | "REQUEST_PENDING"
+  | "CHAIN_UNVERIFIED"
 
 export interface AdvanceBlocker {
   code: AdvanceBlockerCode

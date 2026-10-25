@@ -74,6 +74,7 @@ export function CriteriaList({ invoice }: { invoice: InvoiceDetail }) {
  * any pending transaction; an unconfirmed advance or settlement is never shown as done.
  */
 export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail; transactions: TransactionRecord[] }) {
+  if (invoice.financialStatusVerified === false) return <UnverifiedMoneyNotice title="Payment breakdown" invoice={invoice} />
   const status = invoice.onchainStatus
   const hasAdvance = !isZero(invoice.advanceAmount)
   const advance = hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount)
@@ -154,8 +155,40 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   )
 }
 
+/**
+ * Live mode, chain not read: escrow, advance and payout figures are unknown, so none is shown. The invoice's own terms
+ * (amount, and the 90% advance it would allow) are facts from the frozen invoice record and are shown as such.
+ */
+function UnverifiedMoneyNotice({ title, invoice }: { title: string; invoice: InvoiceDetail }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>Not connected to the blockchain yet.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="rounded-lg bg-muted/60 p-3 text-muted-foreground">
+          Escrow, advances and payouts are read from the contract, which isn&apos;t connected. No payment is shown because none can be
+          verified. The status badge above comes from a saved record, not the chain.
+        </p>
+        <dl className="grid grid-cols-2 gap-3">
+          <div>
+            <dt className="text-xs text-muted-foreground">Invoice amount (agreed terms)</dt>
+            <dd className="mt-0.5"><Amount value={invoice.amount} /></dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Advance this would allow (90%)</dt>
+            <dd className="mt-0.5"><Amount value={advanceFor(invoice.amount)} /></dd>
+          </div>
+        </dl>
+      </CardContent>
+    </Card>
+  )
+}
+
 /** Escrow and reserve are separate balances; this makes the money flow explicit. */
 export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: InvoiceDetail; reserveAvailable: string }) {
+  if (invoice.financialStatusVerified === false) return <UnverifiedMoneyNotice title="Where the money is" invoice={invoice} />
   const status = invoice.onchainStatus
   const advance = advanceFor(invoice.amount)
   const hasAdvance = !isZero(invoice.advanceAmount)
@@ -263,7 +296,7 @@ export function EvaluationPanel({
           <CardTitle className="flex items-center gap-2">
             <Sparkles className="size-4" aria-hidden /> AI evaluation
           </CardTitle>
-          <SimulatedTag>Simulated AI evaluation</SimulatedTag>
+          {evaluation.simulated && <SimulatedTag>Simulated AI evaluation</SimulatedTag>}
         </div>
         <CardDescription>
           The AI only recommends whether the work satisfies the agreed criteria. It is not the final arbiter, never
@@ -414,6 +447,24 @@ export function TransactionList({
   )
 }
 
+/** Live mode: marks a status that was not read from the chain, and dev fixtures that are not on any chain. */
+export function LiveStatusPills({ invoice }: { invoice: InvoiceDetail }) {
+  return (
+    <>
+      {invoice.isTestFixture && (
+        <Pill tone="warning" title="A development test fixture. It does not exist on any blockchain.">
+          Test fixture · no blockchain
+        </Pill>
+      )}
+      {invoice.financialStatusVerified === false && (
+        <Pill tone="neutral" title="This status is a saved record, not read from the blockchain.">
+          Status not verified on-chain
+        </Pill>
+      )}
+    </>
+  )
+}
+
 export function InvoiceRow({ invoice, href, right }: { invoice: InvoiceDetail; href: string; right: React.ReactNode }) {
   const session = useSession()
   const role = session.data?.role
@@ -438,7 +489,10 @@ export function InvoiceRow({ invoice, href, right }: { invoice: InvoiceDetail; h
               {counterparty} · {formatDate(invoice.createdAt)}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">{right}</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {right}
+            <LiveStatusPills invoice={invoice} />
+          </div>
         </div>
         <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden />
       </Link>
@@ -468,6 +522,7 @@ export function InvoiceHeaderCard({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">Invoice #{invoice.invoiceId}</span>
           <OnchainStatusBadge status={invoice.onchainStatus} />
+          <LiveStatusPills invoice={invoice} />
           {badges}
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

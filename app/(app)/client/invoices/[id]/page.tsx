@@ -36,7 +36,7 @@ import {
   SimulatedTag,
   SubmissionStatusBadge,
 } from "@/components/duely/primitives"
-import { useAction, useInvoiceBundle } from "@/hooks/use-duely"
+import { useAction, useInvoiceBundle, useRepository } from "@/hooks/use-duely"
 import type { InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canClientApprove, canClientDispute, canFund, evaluationFor, settlementProjection } from "@/lib/frontend/eligibility"
 import { formatToken, isZero } from "@/lib/frontend/token"
@@ -60,6 +60,7 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
 function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
   const toast = useToast()
   const { invoice, submissions, evaluations, timeline, transactions, reserveAvailable } = bundle
+  const live = useRepository().mode === "api"
   const [confirm, setConfirm] = React.useState<null | "approve" | "dispute">(null)
 
   const fund = useAction((repo) => repo.fundInvoice(invoice.invoiceId))
@@ -117,7 +118,22 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
         </Alert>
       )}
 
-      {/* Decision area */}
+      {/* Decision area. Live mode: funding, approval and disputes are on-chain actions that are not connected. */}
+      {live ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your decision</CardTitle>
+            <CardDescription>On-chain actions aren&apos;t connected yet.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Funding escrow, approving work and opening a dispute are blockchain transactions from your wallet. They need the deployed
+              contract, which isn&apos;t connected, so they&apos;re unavailable here and nothing is paid or settled.
+            </p>
+            <p>You can still review the criteria, the freelancer&apos;s evidence and any evaluation below.</p>
+          </CardContent>
+        </Card>
+      ) : (
       <Card className={invoice.onchainStatus === "Disputed" ? "ring-2 ring-destructive/40" : undefined}>
         <CardHeader>
           <CardTitle>Your decision</CardTitle>
@@ -190,6 +206,7 @@ function DetailBody({ bundle }: { bundle: InvoiceBundle }) {
           )}
         </CardContent>
       </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">

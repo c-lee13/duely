@@ -14,6 +14,7 @@ import {
   Plus,
   RotateCcw,
   Settings2,
+  ShieldCheck,
   UserRound,
   Wallet,
 } from "lucide-react"
@@ -32,6 +33,7 @@ import { useBalances, useRepository, useSession } from "@/hooks/use-duely"
 import type { DemoRole } from "@/lib/frontend/domain"
 import type { DemoControls } from "@/lib/frontend/repository"
 import { Amount, AddressChip } from "./primitives"
+import { LiveAuthGate } from "./live-auth"
 import { useToast } from "./toast"
 
 export const ROLE_HOME: Record<DemoRole, string> = {
@@ -94,17 +96,18 @@ export function useSwitchRole() {
   return React.useCallback(
     (role: DemoRole, navigate = true) => {
       repo.demo?.switchRole(role)
+      repo.live?.setViewRole(role)
       if (navigate) router.push(ROLE_HOME[role])
     },
     [repo, router]
   )
 }
 
-export function RoleSwitcher({ current }: { current: DemoRole }) {
+export function RoleSwitcher({ current, roles }: { current: DemoRole; roles?: DemoRole[] }) {
   const switchRole = useSwitchRole()
   return (
-    <div role="radiogroup" aria-label="Demo role" className="inline-flex rounded-lg bg-muted p-0.5">
-      {(Object.keys(ROLE_META) as DemoRole[]).map((role) => {
+    <div role="radiogroup" aria-label={roles ? "View" : "Demo role"} className="inline-flex rounded-lg bg-muted p-0.5">
+      {(roles ?? (Object.keys(ROLE_META) as DemoRole[])).map((role) => {
         const { label, icon: Icon } = ROLE_META[role]
         const active = role === current
         return (
@@ -129,20 +132,27 @@ export function RoleSwitcher({ current }: { current: DemoRole }) {
 }
 
 function WalletChip() {
+  const repo = useRepository()
   const session = useSession()
-  const balances = useBalances(session.data ? `${session.data.role}` : undefined)
-  if (!session.data) return <Skeleton className="h-8 w-40" />
+  const live = repo.mode === "api"
+  const balances = useBalances(session.data && !live ? `${session.data.role}` : undefined)
+  if (!session.data) return live ? null : <Skeleton className="h-8 w-40" />
   return (
     <div className="hidden items-center gap-2 rounded-lg border bg-card px-2.5 py-1 text-xs md:flex">
       <Wallet className="size-3.5 text-muted-foreground" aria-hidden />
       <div className="flex flex-col leading-tight">
         <span className="flex items-center gap-1">
-          <span className="font-medium">{session.data.displayName}</span>
+          {!live && <span className="font-medium">{session.data.displayName}</span>}
           <AddressChip address={session.data.wallet} />
         </span>
         <span className="text-muted-foreground">
-          {balances.data ? <Amount value={balances.data.walletBalance} className="font-normal" /> : "…"}{" "}
-          · simulated wallet
+          {live ? (
+            "verified wallet"
+          ) : (
+            <>
+              {balances.data ? <Amount value={balances.data.walletBalance} className="font-normal" /> : "…"} · simulated wallet
+            </>
+          )}
         </span>
       </div>
     </div>
@@ -221,6 +231,7 @@ function DemoControlsBody({ demo, onClose }: { demo: DemoControls; onClose: () =
 
 function DemoBanner({ onOpenControls }: { onOpenControls: () => void }) {
   const repo = useRepository()
+  if (repo.mode === "api") return <LiveBanner />
   if (repo.mode !== "mock") return null
   return (
     <div className="border-b border-warning/30 bg-warning/10 text-warning-foreground">
@@ -240,6 +251,41 @@ function DemoBanner({ onOpenControls }: { onOpenControls: () => void }) {
           className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1.5 font-medium sm:py-0.5 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <Settings2 className="size-3.5" aria-hidden /> Demo controls
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function LiveBanner() {
+  const repo = useRepository()
+  const [busy, setBusy] = React.useState(false)
+  return (
+    <div className="border-b border-primary/20 bg-primary/5 text-foreground">
+      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-1.5 text-xs sm:px-6">
+        <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
+        <p className="min-w-0 flex-1">
+          <span className="font-semibold">Live data.</span>{" "}
+          <span className="hidden sm:inline">
+            Invoices, evidence and evaluations are stored in Supabase. Escrow, payments and balances aren&apos;t connected to the
+            blockchain yet, so nothing is paid and no figure here is a confirmed payment.
+          </span>
+          <span className="sm:hidden">Stored in Supabase · blockchain payments not connected yet.</span>
+        </p>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              await repo.live?.signOut()
+            } finally {
+              setBusy(false)
+            }
+          }}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1.5 font-medium underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:py-0.5"
+        >
+          Sign out
         </button>
       </div>
     </div>
@@ -348,11 +394,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             )}
             <WalletChip />
-            {role && repo.demo ? <RoleSwitcher current={role} /> : <Skeleton className="h-9 w-28 md:h-8" />}
+            {role && repo.demo ? (
+              <RoleSwitcher current={role} />
+            ) : role && repo.live ? (
+              <RoleSwitcher current={role} roles={["client", "freelancer"]} />
+            ) : repo.mode === "api" ? null : (
+              <Skeleton className="h-9 w-28 md:h-8" />
+            )}
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 md:py-8">{children}</main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 md:py-8">
+        {repo.mode === "api" ? <LiveAuthGate>{children}</LiveAuthGate> : children}
+      </main>
       <footer className="border-t">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:justify-between sm:px-6">
           <span>Duely · XRPL EVM hackathon MVP · escrow-backed early payment</span>

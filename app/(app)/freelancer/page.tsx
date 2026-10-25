@@ -141,6 +141,9 @@ function Dashboard({ session }: { session: Session }) {
   // Confirmed ledger values only: advanceAmount / freelancerReceived are written on confirmed transactions.
   const invoiced = sum(list.map((i) => i.amount))
   const received = sum(list.map((i) => i.freelancerReceived))
+  // Live mode, chain not read: received/advance/pending figures are unknown, so none is shown.
+  const unverified = list.some((i) => i.financialStatusVerified === false)
+  const NotConnected = <span className="text-base">Not connected</span>
   const advances = sum(list.map((i) => i.advanceAmount))
   const settlements = sub(received, advances)
   const open = list.filter((i) => i.onchainStatus === "Funded" || i.onchainStatus === "Advanced")
@@ -186,7 +189,7 @@ function Dashboard({ session }: { session: Session }) {
                   {simulated && <SimulatedTag className="ml-1" />}
                 </p>
                 <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums sm:text-5xl">
-                  <Amount value={received} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />
+                  {unverified ? <span className="text-3xl">Not connected</span> : <Amount value={received} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />}
                 </p>
                 <p className="mt-1 max-w-md text-xs text-navy-foreground/70">
                   Advances come from the separate platform reserve; the rest is paid from escrow after the client
@@ -196,12 +199,12 @@ function Dashboard({ session }: { session: Session }) {
               <dl className="relative mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-white/10 p-3 ring-1 ring-white/15">
                   <dt className="text-xs text-navy-foreground/70">Advances received</dt>
-                  <dd className="mt-0.5 text-lg font-semibold tabular-nums"><Amount value={advances} hideSymbol /></dd>
+                  <dd className="mt-0.5 text-lg font-semibold tabular-nums">{unverified ? NotConnected : <Amount value={advances} hideSymbol />}</dd>
                   <p className="text-[11px] text-navy-foreground/60">Confirmed · from reserve</p>
                 </div>
                 <div className="rounded-xl bg-white/10 p-3 ring-1 ring-white/15">
                   <dt className="text-xs text-navy-foreground/70">Pending earnings</dt>
-                  <dd className="mt-0.5 text-lg font-semibold tabular-nums"><Amount value={pending} hideSymbol /></dd>
+                  <dd className="mt-0.5 text-lg font-semibold tabular-nums">{unverified ? NotConnected : <Amount value={pending} hideSymbol />}</dd>
                   <p className="text-[11px] text-navy-foreground/60">
                     Awaiting client approval
                     {!isZero(frozen) && <> · {" "}<Amount value={frozen} hideSymbol className="text-inherit font-normal" /> frozen</>}

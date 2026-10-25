@@ -1,0 +1,83 @@
+export type ApiErrorCode =
+  | "UNAUTHENTICATED"
+  | "NO_VERIFIED_WALLET"
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "INVALID_INPUT"
+  | "AMBIGUOUS_INVOICE"
+  | "BAD_ORIGIN"
+  // integrations that do not exist yet or cannot be reached
+  | "INTEGRATION_UNAVAILABLE"
+  | "EVALUATOR_UNAVAILABLE"
+  | "CHAIN_ERROR"
+  // invoice registration
+  | "CHAIN_TX_PENDING"
+  | "CHAIN_TX_INVALID"
+  | "CRITERIA_HASH_MISMATCH"
+  | "NOT_INVOICE_CREATOR"
+  // evaluation
+  | "STALE_SUBMISSION"
+  | "EVALUATION_IN_PROGRESS"
+  | "CRITERIA_INCOMPLETE"
+  | "UPLOAD_NOT_FOUND"
+  | "EVALUATOR_FAILED"
+  // advances
+  | "NO_SUBMISSION"
+  | "NOT_EVALUATED"
+  | "STALE_EVALUATION"
+  | "EVALUATION_FAILED"
+  | "EVALUATION_NOT_REAL"
+  | "NOT_FUNDED"
+  | "ALREADY_ADVANCED"
+  | "INVOICE_DISPUTED"
+  | "INVOICE_SETTLED"
+  | "INSUFFICIENT_RESERVE"
+  | "INTEGRITY_MISMATCH"
+  | "SIGNER_FAILED"
+
+const STATUS: Record<ApiErrorCode, number> = {
+  UNAUTHENTICATED: 401,
+  NO_VERIFIED_WALLET: 403,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  INVALID_INPUT: 400,
+  AMBIGUOUS_INVOICE: 409,
+  BAD_ORIGIN: 403,
+  INTEGRATION_UNAVAILABLE: 503,
+  EVALUATOR_UNAVAILABLE: 503,
+  CHAIN_ERROR: 502,
+  CHAIN_TX_PENDING: 409,
+  CHAIN_TX_INVALID: 422,
+  CRITERIA_HASH_MISMATCH: 422,
+  NOT_INVOICE_CREATOR: 403,
+  STALE_SUBMISSION: 409,
+  EVALUATION_IN_PROGRESS: 409,
+  CRITERIA_INCOMPLETE: 409,
+  UPLOAD_NOT_FOUND: 409,
+  EVALUATOR_FAILED: 502,
+  NO_SUBMISSION: 409,
+  NOT_EVALUATED: 409,
+  STALE_EVALUATION: 409,
+  EVALUATION_FAILED: 409,
+  EVALUATION_NOT_REAL: 409,
+  NOT_FUNDED: 409,
+  ALREADY_ADVANCED: 409,
+  INVOICE_DISPUTED: 409,
+  INVOICE_SETTLED: 409,
+  INSUFFICIENT_RESERVE: 409,
+  INTEGRITY_MISMATCH: 409,
+  SIGNER_FAILED: 502,
+}
+
+/** Error with a stable machine code and an HTTP status. Messages are safe to show to users: never put secrets or evidence in them. */
+export class ApiError extends Error {
+  readonly status: number
+  constructor(
+    readonly code: ApiErrorCode,
+    message: string
+  ) {
+    super(message)
+    this.name = "ApiError"
+    this.status = STATUS[code]
+  }
+}

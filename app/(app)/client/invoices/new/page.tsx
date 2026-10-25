@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { RoleGate } from "@/components/duely/role-gate"
 import { useToast } from "@/components/duely/toast"
 import { AddressChip, Amount, ButtonLink, PageHeader, Pill, SimulatedTag } from "@/components/duely/primitives"
-import { useAction } from "@/hooks/use-duely"
+import { useAction, useRepository } from "@/hooks/use-duely"
 import { ACTORS, nameForWallet } from "@/lib/mocks/actors"
 import type { Address } from "@/lib/frontend/domain"
 import { advanceFor, DEMO_TOKEN, parseTokenInput } from "@/lib/frontend/token"
@@ -313,6 +313,26 @@ function Field({
   )
 }
 
+function LiveCreateUnavailable() {
+  return (
+    <div className="mx-auto max-w-2xl space-y-6">
+      <PageHeader eyebrow="New invoice" title="Creating invoices needs the blockchain" description="This isn't available in live mode yet." />
+      <Card>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            An invoice is created by a transaction from your wallet on the XRPL EVM chain; Duely then verifies that transaction and saves
+            the invoice. The deployed contract and wallet connection that make this possible aren&apos;t available yet, and Duely won&apos;t
+            invent an on-chain invoice.
+          </p>
+          <p>Invoices that already exist for your wallet appear on your dashboard.</p>
+          <ButtonLink href="/client" variant="outline">Back to invoices</ButtonLink>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 export default function NewInvoicePage() {
-  return <RoleGate role="client">{(session) => <NewInvoice clientWallet={session.wallet} />}</RoleGate>
+  const live = useRepository().mode === "api"
+  return <RoleGate role="client">{(session) => (live ? <LiveCreateUnavailable /> : <NewInvoice clientWallet={session.wallet} />)}</RoleGate>
 }

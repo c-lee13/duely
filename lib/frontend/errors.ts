@@ -15,6 +15,8 @@ export type DomainErrorCode =
   | "TX_FAILED"
   | "EVALUATION_FAILED"
   | "NOT_IMPLEMENTED"
+  | "UNAUTHENTICATED"
+  | "INTEGRATION_UNAVAILABLE"
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode

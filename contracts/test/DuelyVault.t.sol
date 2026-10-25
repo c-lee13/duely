@@ -9,6 +9,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {DuelyVault} from "../src/DuelyVault.sol";
 import {IDuelyVault} from "../src/IDuelyVault.sol";
+import {MockEscrow} from "./mocks/MockEscrow.sol";
 import {DuelyVaultHarness} from "./mocks/DuelyVaultHarness.sol";
 import {RLUSDLikeToken} from "./mocks/RLUSDLikeToken.sol";
 import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
@@ -580,7 +581,7 @@ contract DuelyVaultTest is Test {
     // ------------------------------------------------------------------ escrow scaffolding
 
     function test_setEscrow_adminOnce() public {
-        address esc = address(new DuelyVault(IERC20(address(rlusd)), admin, operator, pauser));
+        address esc = address(new MockEscrow(address(vault), address(rlusd)));
         assertEq(vault.escrow(), address(0));
 
         vm.prank(operator);
@@ -608,21 +609,42 @@ contract DuelyVaultTest is Test {
         assertEq(vault.escrow(), address(0), "failed attempts do not spend the one-time right");
     }
 
-    function test_repaymentAndLoss_revertUntilA4_forEveryCaller() public {
-        address esc = address(new DuelyVault(IERC20(address(rlusd)), admin, operator, pauser));
-        vm.prank(admin);
-        vault.setEscrow(esc);
+    function test_repaymentAndLoss_onlyEscrow_andOnlyForOpenAdvances() public {
+        address esc = address(new MockEscrow(address(vault), address(rlusd)));
         _deposit(lp1, 4000 * E18);
 
-        address[5] memory callers = [esc, admin, operator, lp1, address(this)];
+        // Before an escrow is configured nobody can call.
+        vm.expectRevert(IDuelyVault.EscrowNotSet.selector);
+        vault.recordRepayment(1);
+        vm.expectRevert(IDuelyVault.EscrowNotSet.selector);
+        vault.finalizeLoss(1);
+
+        vm.prank(admin);
+        vault.setEscrow(esc);
+        address[4] memory callers = [admin, operator, lp1, address(this)];
         for (uint256 i; i < callers.length; i++) {
             vm.startPrank(callers[i]);
-            vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
+            vm.expectRevert(IDuelyVault.NotEscrow.selector);
             vault.recordRepayment(1);
-            vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
+            vm.expectRevert(IDuelyVault.NotEscrow.selector);
             vault.finalizeLoss(1);
             vm.stopPrank();
         }
+        // The escrow itself still needs an Open advance.
+        vm.startPrank(esc);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IDuelyVault.AdvanceNotOpen.selector, 1, IDuelyVault.AdvanceStatus.None
+            )
+        );
+        vault.recordRepayment(1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IDuelyVault.AdvanceNotOpen.selector, 1, IDuelyVault.AdvanceStatus.None
+            )
+        );
+        vault.finalizeLoss(1);
+        vm.stopPrank();
         assertEq(vault.outstandingPrincipal(), 0);
         assertEq(rlusd.balanceOf(lp2), 1_000_000 * E18, "no funds moved");
     }
@@ -640,7 +662,7 @@ contract DuelyVaultTest is Test {
         _deposit(lp1, 4000 * E18);
         assertEq(vault.maxAdvanceNow(), 0, "no escrow yet");
 
-        address esc = address(new DuelyVault(IERC20(address(rlusd)), admin, operator, pauser));
+        address esc = address(new MockEscrow(address(vault), address(rlusd)));
         vm.prank(admin);
         vault.setEscrow(esc);
         assertEq(vault.maxAdvanceNow(), 1000 * E18, "25% of NAV binds first");

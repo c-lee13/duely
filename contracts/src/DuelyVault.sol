@@ -11,11 +11,12 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IDuelyVault} from "./IDuelyVault.sol";
+import {IInvoiceAdvanceV2} from "./IInvoiceAdvanceV2.sol";
 
 /// @title DuelyVault
 /// @notice Pooled RLUSD vault. LPs deposit the underlying asset and receive transferable
 /// `dvRLUSD` shares. A2: LP deposits/redemptions, share pricing, pause scaffolding. A3: advance
-/// funding. `recordRepayment` and `finalizeLoss` still revert until A4.
+/// funding. A4: repayment (fee income) and loss finalization.
 ///
 /// Accounting (docs/VAULT_IMPLEMENTATION_SPEC.md §4.2):
 ///   totalAssets = token.balanceOf(vault) + outstandingPrincipal          (impairment is 0)
@@ -211,23 +212,61 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
         emit AdvanceFunded(invoiceId, freelancer, invoiceAmount, principal, fee, outstandingAfter);
     }
 
-    function recordRepayment(uint256) external pure {
-        revert AdvanceFlowNotImplemented();
+    /// @notice Escrow-only. Closes an Open advance as Repaid. The amounts come from the advance
+    /// stored at funding (principal + fee), never from the caller: the vault pulls exactly that
+    /// from the escrow (which must have approved it) and requires the balance to rise by exactly
+    /// that amount. Principal returns from outstanding to cash and the fee becomes realized NAV.
+    /// Never blocked by either pause, so settlement cannot be trapped.
+    function recordRepayment(uint256 invoiceId) external nonReentrant {
+        address escrow_ = _requireEscrowCaller();
+        Advance storage adv = _openAdvance(invoiceId);
+
+        uint256 principal = adv.principal;
+        uint256 fee = adv.fee;
+        uint256 expected = principal + fee;
+
+        adv.status = AdvanceStatus.Repaid;
+        adv.principalRepaid = principal;
+        adv.feeEarned = fee;
+        outstandingPrincipal -= principal;
+        totalFeesEarned += fee;
+
+        uint256 balanceBefore = availableLiquidity();
+        IERC20(asset()).safeTransferFrom(escrow_, address(this), expected);
+        // forge-lint: disable-next-line(incorrect-strict-equality)
+        if (availableLiquidity() - balanceBefore != expected) revert UnsupportedTokenBehavior();
+
+        emit AdvanceRepaid(invoiceId, principal, fee);
     }
 
-    function finalizeLoss(uint256) external pure {
-        revert AdvanceFlowNotImplemented();
+    /// @notice Escrow-only. Finalizes an Open advance as a realized loss of its whole principal
+    /// (binary dispute outcome: the client was refunded in full and nothing was recovered). No
+    /// fee is earned and no tokens move; NAV falls by the principal exactly once because the
+    /// advance leaves Open. Never blocked by either pause.
+    function finalizeLoss(uint256 invoiceId) external nonReentrant {
+        _requireEscrowCaller();
+        Advance storage adv = _openAdvance(invoiceId);
+
+        uint256 principal = adv.principal;
+        adv.status = AdvanceStatus.Lost;
+        adv.loss = principal;
+        outstandingPrincipal -= principal;
+        totalRealizedLosses += principal;
+
+        emit AdvanceLossFinalized(invoiceId, principal);
     }
 
     // ---------------------------------------------------------------------
     // Admin scaffolding
     // ---------------------------------------------------------------------
 
-    /// @notice One-time authorization of the escrow. A3 adds the cross-checks against the escrow
-    /// (`escrow.vault() == this`, matching payment token).
+    /// @notice One-time authorization of the escrow. The escrow must point back at this vault, use
+    /// the same payment token and the same fee/advance schedule, so a misconfigured or foreign
+    /// contract cannot be authorized. The right is spent only by a successful call.
     function setEscrow(address escrow_) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (escrow != address(0)) revert EscrowAlreadySet();
         if (escrow_ == address(0) || escrow_.code.length == 0) revert InvalidAddress();
+        if (!_isCompatibleEscrow(escrow_)) revert EscrowMismatch();
         escrow = escrow_;
         emit EscrowSet(escrow_);
     }
@@ -302,6 +341,41 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
         uint256 maxOutstanding = Math.mulDiv(nav, MAX_UTILIZATION_BPS, BPS);
         headroom =
             outstandingPrincipal >= maxOutstanding ? 0 : maxOutstanding - outstandingPrincipal;
+    }
+
+    function _requireEscrowCaller() private view returns (address escrow_) {
+        escrow_ = escrow;
+        if (escrow_ == address(0)) revert EscrowNotSet();
+        if (msg.sender != escrow_) revert NotEscrow();
+    }
+
+    function _openAdvance(uint256 invoiceId) private view returns (Advance storage adv) {
+        adv = advances[invoiceId];
+        if (adv.status != AdvanceStatus.Open) revert AdvanceNotOpen(invoiceId, adv.status);
+    }
+
+    function _isCompatibleEscrow(address escrow_) private view returns (bool) {
+        IInvoiceAdvanceV2 e = IInvoiceAdvanceV2(escrow_);
+        try e.vault() returns (IDuelyVault v) {
+            if (address(v) != address(this)) return false;
+        } catch {
+            return false;
+        }
+        try e.paymentToken() returns (IERC20 token) {
+            if (address(token) != asset()) return false;
+        } catch {
+            return false;
+        }
+        try e.FEE_BPS() returns (uint256 feeBps) {
+            if (feeBps != FEE_BPS) return false;
+        } catch {
+            return false;
+        }
+        try e.ADVANCE_BPS() returns (uint256 advanceBps) {
+            return advanceBps <= MAX_ADVANCE_BPS;
+        } catch {
+            return false;
+        }
     }
 
     function _checkPauserOrOperator() private view {

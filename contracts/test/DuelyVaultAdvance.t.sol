@@ -28,7 +28,7 @@ contract DuelyVaultAdvanceTest is Test {
     function setUp() public {
         rlusd = new RLUSDLikeToken();
         vault = new DuelyVault(IERC20(address(rlusd)), admin, operator, pauser);
-        escrow = new MockEscrow();
+        escrow = new MockEscrow(address(vault), address(rlusd));
         rlusd.mint(lp1, 1_000_000 * E18);
         rlusd.mint(lp2, 1_000_000 * E18);
         vm.prank(lp1);
@@ -412,19 +412,5 @@ contract DuelyVaultAdvanceTest is Test {
         vm.prank(operator);
         vault.unpauseAdvances();
         escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
-    }
-
-    // ------------------------------------------------------------------ still-deferred A4 paths
-
-    function test_repaymentAndLoss_stillRevertEvenForEscrowAfterFunding() public {
-        _ready();
-        _fund(1, 900 * E18);
-        vm.prank(address(escrow));
-        vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
-        vault.recordRepayment(1);
-        vm.prank(address(escrow));
-        vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
-        vault.finalizeLoss(1);
-        assertEq(uint8(vault.getAdvance(1).status), uint8(IDuelyVault.AdvanceStatus.Open));
     }
 }

@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 /// @notice Public interface of DuelyVault (docs/VAULT_IMPLEMENTATION_SPEC.md, A1.5 final).
-/// A2: LP side (ERC-4626, share pricing, pause scaffolding). A3: fundAdvance. recordRepayment
-/// and finalizeLoss are declared here but revert until A4.
+/// A2: LP side (ERC-4626, share pricing, pause scaffolding). A3: fundAdvance. A4: recordRepayment
+/// and finalizeLoss.
 /// Types, events and errors below are proposals until the compiled ABI is exported.
 interface IDuelyVault is IERC4626 {
     enum AdvanceStatus {
@@ -50,7 +50,7 @@ interface IDuelyVault is IERC4626 {
     error NotEscrow();
     error UnsupportedTokenBehavior();
     error AdvancesAreDisabled();
-    error AdvanceFlowNotImplemented();
+    error EscrowMismatch();
     error InvalidAmount();
     error InvalidFee(uint256 provided, uint256 expected);
     error AdvanceAlreadyExists(uint256 invoiceId);
@@ -59,10 +59,9 @@ interface IDuelyVault is IERC4626 {
     error ExceedsUtilizationLimit(uint256 outstandingAfter, uint256 maxOutstanding);
     error ExceedsInvoiceExposureLimit(uint256 principal, uint256 maxPrincipal);
     error InsufficientLiquidity(uint256 required, uint256 available);
-    // AdvanceNotOpen is reserved for A4 (repayment / loss).
     // Plus OZ ERC4626 (ERC4626ExceededMax*), Pausable and AccessControl errors.
 
-    // ---- escrow-only writes (recordRepayment / finalizeLoss revert until A4) ----
+    // ---- escrow-only writes ----
     function fundAdvance(
         uint256 invoiceId,
         address freelancer,

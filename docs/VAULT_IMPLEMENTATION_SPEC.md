@@ -102,7 +102,7 @@ contracts/src/
 
 1. Deploy `DuelyVault(rlusd, admin, operator, pauser)`. The vault starts with `escrow == address(0)`: LPs may deposit and redeem, but `fundAdvance`, `recordRepayment` and `finalizeLoss` revert (`EscrowNotSet`).
 2. Deploy `InvoiceAdvanceV2(rlusd, vault, admin, operator, evaluator)`. Its constructor requires `vault.asset() == rlusd`.
-3. The vault admin calls `vault.setEscrow(escrow)` **exactly once**. It reverts if the escrow is already set, if the address is zero or has no code, or if `escrow.vault() != address(vault)` or `escrow.paymentToken() != vault.asset()`. There is no way to change or clear the escrow afterwards; replacing it means redeploying the vault.
+3. The vault admin calls `vault.setEscrow(escrow)` **exactly once**. It reverts if the escrow is already set, if the address is zero or has no code, or if `escrow.vault() != address(vault)`, `escrow.paymentToken() != vault.asset()`, `escrow.FEE_BPS() != vault.FEE_BPS()` or `escrow.ADVANCE_BPS() > vault.MAX_ADVANCE_BPS()` (reverts `EscrowMismatch`; a rejected attempt does not spend the one-time right). There is no way to change or clear the escrow afterwards; replacing it means redeploying the vault.
 4. The deploy script verifies `vault.escrow() == escrow`, the role assignments (evaluator, operator, pauser and admin distinct), the RLUSD address/symbol/decimals (18), and that the V1 deployments are untouched, and writes `contracts/deployments/xrpl-evm-testnet-v2.json`.
 
 Until step 3 completes, the system is not live for borrowers. After it, the `setEscrow` right is spent, so even a compromised admin cannot redirect the vault's accounting calls to another contract.
@@ -331,7 +331,8 @@ struct Invoice {
 }
 
 constructor(IERC20 paymentToken_, IDuelyVault vault_, address admin, address operator, address evaluator);
-// views: paymentToken(), vault(), totalEscrow(), nextInvoiceId(), getInvoice(id)
+// views: paymentToken(), vault(), totalEscrow(), nextInvoiceId(), getInvoice(id), ADVANCE_BPS (9000), FEE_BPS (300)
+// constructor reverts VaultMismatch unless vault.asset() == paymentToken, vault.FEE_BPS() == 300 and vault.MAX_ADVANCE_BPS() >= 9000
 function quoteAdvance(uint256 amount) external pure
     returns (uint256 advance, uint256 fee, uint256 vaultRepayment, uint256 freelancerRemainder);
 ```

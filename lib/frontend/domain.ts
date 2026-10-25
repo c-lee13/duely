@@ -1,52 +1,36 @@
 /**
  * Frontend domain types.
  *
- * The first block mirrors the shared interface in CLAUDE.md §6 field-for-field.
- * `lib/shared/types.ts` is owned by the integration owner and does not exist yet;
- * once it is published, replace this block with re-exports from `@/lib/shared/types`.
+ * The shared CLAUDE.md §6 types now live in `lib/shared/types.ts` and are re-exported below.
  * Everything below the divider is a UI-only extension used by the repository layer.
  */
 
-// ---- Mirror of CLAUDE.md §6 (do not change shape here) ----------------------
+// ---- Shared interface (CLAUDE.md section 6): defined once in lib/shared/types.ts -----------------------------
 
-export type Address = `0x${string}`
-export type Bytes32 = `0x${string}`
-export type InvoiceId = string // uint256 in decimal string form
-export type TokenAmount = string // ERC-20 base units; never floating point
+import type {
+  Address,
+  Bytes32,
+  CriterionResult,
+  EvaluationResult,
+  InvoiceId,
+  InvoiceRecord,
+  OnchainInvoiceStatus,
+  SubmissionStatus,
+  TokenAmount,
+  TxAction,
+} from "@/lib/shared/types"
 
-export type OnchainInvoiceStatus =
-  | "Created"
-  | "Funded"
-  | "Advanced"
-  | "Disputed"
-  | "Settled"
-export type SubmissionStatus = "NotSubmitted" | "Submitted" | "Evaluated"
-
-export interface InvoiceRecord {
-  invoiceId: InvoiceId
-  client: Address
-  freelancer: Address
-  amount: TokenAmount
-  advanceAmount: TokenAmount // actual amount advanced, 0 before advance
-  criteriaHash: Bytes32
-  onchainStatus: OnchainInvoiceStatus
-  submissionStatus: SubmissionStatus
-  description?: string
-}
-
-export interface CriterionResult {
-  criterion: string
-  passed: boolean
-  reason: string
-}
-
-export interface EvaluationResult {
-  invoiceId: InvoiceId
-  submissionId: string
-  score: number // integer 0..100
-  passed: boolean
-  criteriaResults: CriterionResult[]
-  summary: string
+export type {
+  Address,
+  Bytes32,
+  CriterionResult,
+  EvaluationResult,
+  InvoiceId,
+  InvoiceRecord,
+  OnchainInvoiceStatus,
+  SubmissionStatus,
+  TokenAmount,
+  TxAction,
 }
 
 // ---- UI-only extensions ----------------------------------------------------
@@ -120,19 +104,12 @@ export interface EvaluationRecord extends EvaluationResult {
   errorMessage?: string
 }
 
-export type TxAction =
-  | "createInvoice"
-  | "fundInvoice"
-  | "depositReserve"
-  | "approveAdvance"
-  | "approveWork"
-  | "disputeInvoice"
-
 export type TxStatus = "pending" | "confirmed" | "failed"
 
 export interface TransactionRecord {
   id: string
-  action: TxAction
+  /** `approve` is the ERC-20 allowance step that precedes funding or a reserve deposit. */
+  action: TxAction | "approve"
   status: TxStatus
   invoiceId?: InvoiceId
   amount?: TokenAmount
@@ -155,6 +132,8 @@ export interface AdvanceRequest {
   createdAt: string
   reason?: string
   transactionId?: string
+  /** The broadcast approveAdvance, once the backend recorded one. It is pending until reconciled from a verified receipt. */
+  txHash?: `0x${string}`
 }
 
 export type TimelineLayer = "onchain" | "offchain"
@@ -233,4 +212,6 @@ export interface AdvanceRequestResult {
   requestId: string
   status: AdvanceRequestStatus
   reason?: string
+  txHash?: `0x${string}`
+  amount?: TokenAmount
 }

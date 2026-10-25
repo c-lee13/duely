@@ -84,6 +84,11 @@ export interface MockChainOptions {
   tokenPaused?: boolean
   /** With tokenPaused unset: answer `paused()` like a real node does for a token that lacks it (revert, no data). */
   tokenPauseRevertsEmpty?: boolean
+  /**
+   * Called when a mock wallet sends a transaction. Return `{status, logs}` to have it mined immediately (as a real chain does
+   * a few seconds later), or null/undefined to leave it unmined (pending).
+   */
+  autoMine?: (tx: { hash: string; from: string; to: string; data: Hex }) => { status: "success" | "reverted"; logs: { address: string; topics: Hex[]; data: Hex }[] } | null | undefined
 }
 
 export interface RpcRecord {
@@ -202,6 +207,18 @@ export function createMockChain(options: MockChainOptions = {}) {
   const receipts = new Map<string, unknown>() // lowercase tx hash -> JSON-RPC receipt
   const rpcTxs = new Map<string, RpcTx>() // lowercase tx hash -> JSON-RPC transaction
   const blocks = new Map<number, RpcTx[]>() // block number -> transactions
+  /** Logs served by eth_getLogs (event scans such as crash recovery), in JSON-RPC form. */
+  const rpcLogs: {
+    address: string
+    topics: Hex[]
+    data: Hex
+    blockNumber: string
+    blockHash: string
+    transactionHash: string
+    transactionIndex: string
+    logIndex: string
+    removed: boolean
+  }[] = []
   let hold: Promise<void> = Promise.resolve()
   let release: () => void = () => {}
 
@@ -242,6 +259,29 @@ export function createMockChain(options: MockChainOptions = {}) {
           rpc.push({ method })
           return (
             rpcTxs.get(String((params as string[])[0]).toLowerCase()) ?? null
+          )
+        }
+        if (method === "eth_getLogs") {
+          rpc.push({ method })
+          const [filter] = params as [
+            { address?: string | string[]; topics?: (Hex | Hex[] | null)[] },
+          ]
+          const wanted =
+            filter.address === undefined
+              ? null
+              : [filter.address].flat().map((a) => a.toLowerCase())
+          return rpcLogs.filter(
+            (l) =>
+              (wanted === null || wanted.includes(l.address.toLowerCase())) &&
+              (filter.topics ?? []).every(
+                (t, i) =>
+                  t === null ||
+                  t === undefined ||
+                  [t]
+                    .flat()
+                    .map((x) => x.toLowerCase())
+                    .includes(l.topics[i]?.toLowerCase())
+              )
           )
         }
         if (method === "eth_getBlockByNumber") {
@@ -441,6 +481,8 @@ export function createMockChain(options: MockChainOptions = {}) {
         return encode(invoiceOrRevert(id))
       case "nextInvoiceId":
         return encode(state.nextInvoiceId)
+      case "paymentToken":
+        return encode(contractAddresses.paymentToken)
       case "reserveBalance":
       case "availableReserve":
         return encode(state.reserve)
@@ -488,10 +530,7 @@ export function createMockChain(options: MockChainOptions = {}) {
   }
 
   // ---- wallets (eth_sendTransaction is recorded, never applied) ----
-  function walletFor(
-    address: string,
-    opts: { chainId?: number } = {}
-  ): ChainWalletClient & { sentFrom: () => number } {
+  function providerFor(address: string, opts: { chainId?: number } = {}) {
     const provider = {
       async request({ method, params }: { method: string; params?: unknown }) {
         walletRequests.push({ method, params })
@@ -519,13 +558,22 @@ export function createMockChain(options: MockChainOptions = {}) {
           hashCounter += 1
           const sentHash = "0x" + hashCounter.toString(16).padStart(64, "0")
           sentByHash.set(sentHash, { from: tx.from, to: tx.to, data: tx.data })
+          const mined = options.autoMine?.({ hash: sentHash, from: tx.from, to: tx.to, data: tx.data })
+          if (mined) receipts.set(sentHash.toLowerCase(), receiptJson(sentHash, tx.from, tx.to, mined.status, mined.logs))
           return sentHash as Hex
         }
         throw new Error(`mock wallet: unexpected method ${method}`)
       },
     }
+    return provider as unknown as EIP1193Provider
+  }
+
+  function walletFor(
+    address: string,
+    opts: { chainId?: number } = {}
+  ): ChainWalletClient & { sentFrom: () => number } {
     const client = createWalletClientFromProvider(
-      provider as unknown as EIP1193Provider,
+      providerFor(address, opts),
       address as `0x${string}`
     )
     return Object.assign(client, {
@@ -601,6 +649,22 @@ export function createMockChain(options: MockChainOptions = {}) {
     blocks,
     rpcTxFor,
     receiptJson,
+    /** Makes a log visible to eth_getLogs (as if emitted by `txHash` in `blockNumber`). */
+    addLog(
+      log: { address: string; topics: Hex[]; data: Hex },
+      txHash: string,
+      blockNumber = 501
+    ) {
+      rpcLogs.push({
+        ...log,
+        blockNumber: toHex(blockNumber),
+        blockHash: "0x" + "ab".repeat(32),
+        transactionHash: txHash,
+        transactionIndex: toHex(0),
+        logIndex: toHex(rpcLogs.length),
+        removed: false,
+      })
+    },
     /** Marks a transaction sent through a mock wallet as mined (default: success, no logs). */
     mine(
       hash: string,
@@ -657,6 +721,8 @@ export function createMockChain(options: MockChainOptions = {}) {
     publicClient: publicClient as unknown as ChainWriteClient &
       ChainPublicClient,
     walletFor,
+    /** The raw EIP-1193 provider a wallet would expose (eth_accounts / eth_chainId / eth_sendTransaction). */
+    providerFor,
     /** eth_call count for a given function (simulations and reads). */
     callsOf: (fn: string) => rpc.filter((r) => r.functionName === fn).length,
   }

@@ -100,6 +100,22 @@ export function useTransactions(sessionKey: string | undefined) {
   return useRepoQuery(sessionKey ? `txs:${sessionKey}` : null, (r) => r.listTransactions())
 }
 
+/**
+ * Calls `fn` every `ms` while `active` is true (for example while an advance is pending, until the server's reconciliation
+ * reports a final state). Stops the moment `active` turns false or the component unmounts.
+ */
+export function usePollWhile(active: boolean, fn: () => void, ms = 4000) {
+  const ref = React.useRef(fn)
+  React.useEffect(() => {
+    ref.current = fn
+  })
+  React.useEffect(() => {
+    if (!active) return
+    const t = setInterval(() => ref.current(), ms)
+    return () => clearInterval(t)
+  }, [active, ms])
+}
+
 /** Wraps a mutation with pending/error state. */
 export function useAction<A extends unknown[], R>(fn: (repo: DuelyRepository, ...args: A) => Promise<R>) {
   const repo = useRepository()

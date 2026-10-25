@@ -56,7 +56,7 @@ export default function WelcomePage() {
         </p>
         <p className="max-w-2xl text-sm text-muted-foreground">
           {live
-            ? "Live data mode: invoices, evidence and evaluations are stored in Supabase. Blockchain payments aren't connected yet."
+            ? "Live mode: invoices, evidence and evaluations are stored in Supabase, and escrow, advances and balances are read from the blockchain. Payments are real testnet transactions and count only once confirmed."
             : "This is a clickable demo. Wallets, transactions and AI evaluations are simulated, and DEMO tokens have no value."}
         </p>
       </section>

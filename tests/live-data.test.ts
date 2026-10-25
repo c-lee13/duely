@@ -4,11 +4,13 @@ import fs from "node:fs"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { bytes, Clock, createPgEvidenceDb, FakeObjectStore } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, ScriptedEvaluator, unavailableDeps } from "./helpers/backend"
-import { handleAdvance, handleEvaluate, handleGetInvoice, handleListInvoices } from "@/lib/backend/handlers"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, ScriptedEvaluator, TEST_SCOPE, unavailableDeps } from "./helpers/backend"
+import { handleAdvance, handleEvaluate, handleGetInvoice, handleListInvoices, handleOperatorInvoices } from "@/lib/backend/handlers"
 import { EvidenceError, initUpload, registerSubmission } from "@/lib/evidence/service"
 import { EvidenceUploadError } from "@/lib/evidence/upload-client"
 import { ApiDuelyRepository, type ApiRepositoryDeps } from "@/lib/frontend/api-repository"
+import { TxLog } from "@/lib/frontend/tx-log"
+import { connectWallet, readWalletState, requireWallet, switchToExpectedChain } from "@/lib/frontend/wallet-chain"
 import type { DuelyRepository } from "@/lib/frontend/repository"
 import { figuresFor, buildTimeline, type ApiInvoiceDetail } from "@/lib/frontend/api-mappers"
 import { DomainError } from "@/lib/frontend/errors"
@@ -68,7 +70,7 @@ beforeEach(async () => {
   evaluator = new ScriptedEvaluator()
   chain = new FakeChainAdapter() // available, but every read throws "unavailable" until a test scripts it
   chain.available = false
-  deps = { db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator }
+  deps = { scope: TEST_SCOPE, db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator }
 })
 
 /** What the browser's fetch would do against the real routes: same handlers, same schema, session = `user`. */
@@ -90,6 +92,7 @@ function shim(getUser: () => string | null): typeof fetch {
     if (m) return handleGetInvoice(req, c, { id: decodeURIComponent(m[1]) })
     if (url.pathname === "/api/evaluate") return handleEvaluate(req, c)
     if (url.pathname === "/api/advances") return handleAdvance(req, c)
+    if (url.pathname === "/api/operator/invoices") return handleOperatorInvoices(req, c)
     return Response.json({ error: { code: "NOT_FOUND", message: "no route" } }, { status: 404 })
   }
 }
@@ -97,7 +100,7 @@ function shim(getUser: () => string | null): typeof fetch {
 /** The browser's upload helper, minus the Supabase Storage network hop: same authorize -> upload -> register sequence. */
 function uploader(getUser: () => string | null): NonNullable<ApiRepositoryDeps["uploadEvidence"]> {
   return (async ({ invoiceId, file, note }: { invoiceId: string; file: File; note?: string }) => {
-    const evDeps = { db: createPgEvidenceDb(db), objects: store, chain: { verify: async () => ({ status: "unavailable" as const }) }, requireChainVerification: false }
+    const evDeps = { scope: TEST_SCOPE, db: createPgEvidenceDb(db), objects: store, chain: { verify: async () => ({ status: "unavailable" as const }) }, requireChainVerification: false }
     try {
       const grant = await initUpload(evDeps, { userId: getUser(), invoiceId, fileName: file.name, fileSize: file.size, mimeType: file.type })
       store.upload(grant.uploadToken, new Uint8Array(await file.arrayBuffer()), file.type)
@@ -155,14 +158,16 @@ describe("backend: GET /api/invoices (list) and on-chain id lookup", () => {
     assert.equal((await get(U.stranger, "2")).status, 200, "their own id resolves")
   })
 
-  it("an on-chain id shared by two of the caller's invoices is reported as ambiguous, not guessed", async () => {
-    await seedInvoice(INV.dupA, 50, W.both, W.client, { contract: "0x" + "1".repeat(40) })
+  it("an on-chain id shared with another deployment's invoice resolves to the ACTIVE deployment's invoice, never ambiguously", async () => {
+    // Same on-chain id (50) on two contracts, both belonging to the same wallets: only the active deployment's is visible.
+    await seedInvoice(INV.dupA, 50, W.both, W.client, { contract: W.contract })
     await seedInvoice(INV.dupB, 50, W.both, W.client, { contract: "0x" + "2".repeat(40) })
     const res = await handleGetInvoice(new Request("http://localhost:3000/x"), ctx(U.both, deps), { id: "50" })
-    assert.equal(res.status, 409)
-    assert.equal(((await res.json()) as { error: { code: string } }).error.code, "AMBIGUOUS_INVOICE")
-    const byUuid = await handleGetInvoice(new Request("http://localhost:3000/x"), ctx(U.both, deps), { id: INV.dupA })
-    assert.equal(byUuid.status, 200, "the UUID is always unambiguous")
+    assert.equal(res.status, 200)
+    assert.equal(((await res.json()) as { invoice: { id: string } }).invoice.id, INV.dupA)
+    const other = await handleGetInvoice(new Request("http://localhost:3000/x"), ctx(U.both, deps), { id: INV.dupB })
+    assert.equal(other.status, 409, "the other deployment's invoice is refused even by UUID")
+    assert.equal(((await other.json()) as { error: { code: string } }).error.code, "WRONG_DEPLOYMENT")
     // clean up so later tests see only the base fixtures
     await db.query("alter table invoice_criteria disable trigger user")
     await db.query("alter table invoices disable trigger user")
@@ -268,7 +273,9 @@ describe("live repository: unauthorized users cannot reach other invoices", () =
     f.live.setViewRole("client")
     assert.deepEqual(await f.listInvoices("client", W.freelancer), [], "freelancer-only user has nothing as a client")
     f.live.setViewRole("platform")
-    assert.deepEqual(await f.listInvoices("platform", W.freelancer), [])
+    // The platform view is authorized by the ON-CHAIN operator role: with no chain the server cannot verify it, with a chain this
+    // user does not hold it. Either way it refuses, and never returns anything.
+    await assert.rejects(f.listInvoices("platform", W.freelancer), (e: unknown) => e instanceof DomainError && ["FORBIDDEN", "INTEGRATION_UNAVAILABLE"].includes(e.code))
     assert.equal((await f.getSession()).role, "platform")
     await assert.rejects(f.getInvoice("2"), (e: unknown) => e instanceof DomainError && e.code === "NOT_FOUND")
   })
@@ -344,12 +351,24 @@ describe("live repository: writes persist and survive a refresh", () => {
 })
 
 describe("blocked workflows fail honestly and never fake a blockchain result", () => {
-  it("create / fund / approve / dispute / deposit / balances throw NOT_IMPLEMENTED and name the missing blockchain integration", async () => {
-    const r = repoFor(U.client)
-    for (const call of [() => r.createInvoice(), () => r.fundInvoice(), () => r.approveInvoice(), () => r.disputeInvoice(), () => r.depositReserve(), () => r.getBalances()] as Array<() => Promise<unknown>>) {
-      await assert.rejects(call(), (e: unknown) => e instanceof DomainError && e.code === "NOT_IMPLEMENTED" && /blockchain|contract|chain/i.test(e.message))
+  it("without a browser wallet, every wallet transaction fails NO_WALLET (never a simulated success) and nothing is recorded", async () => {
+    const r = new ApiDuelyRepository({
+      fetch: shim(() => U.client),
+      storage: null,
+      txLog: new TxLog(null),
+      wallet: { require: (o) => requireWallet({ ...o, provider: null }), state: () => readWalletState(null), connect: () => connectWallet(null), switchNetwork: () => switchToExpectedChain(null), watch: () => () => undefined },
+    })
+    const input = { title: "t", freelancer: W.freelancer as `0x${string}`, amount: "1000", description: "d", criteria: [{ text: "c", mandatory: true }] }
+    for (const call of [() => r.createInvoice(input), () => r.fundInvoice("1"), () => r.approveInvoice("1"), () => r.disputeInvoice("1"), () => r.depositReserve("1000"), () => r.resolveDispute("1", true)] as Array<() => Promise<unknown>>) {
+      await assert.rejects(call(), (e: unknown) => e instanceof DomainError && e.code === "NO_WALLET")
     }
     assert.deepEqual(await r.listTransactions(), [], "no transaction history exists to show")
+    assert.equal((await db.query<{ c: number }>("select count(*)::int c from transactions")).rows[0].c, 0)
+  })
+
+  it("balances need the operator role: a client is refused rather than shown invented numbers", async () => {
+    const r = repoFor(U.client)
+    await assert.rejects(r.getBalances(), (e: unknown) => e instanceof DomainError && ["FORBIDDEN", "INTEGRATION_UNAVAILABLE"].includes(e.code))
   })
 
   it("requesting an advance answers INTEGRATION_UNAVAILABLE (no chain, no signer) and records nothing", async () => {

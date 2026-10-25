@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server"
 import type { ZodType } from "zod"
 import { errorResponse, rejectCrossOrigin, toErrorResponse } from "@/lib/auth/http"
-import { requestAdvance } from "./advances"
+import { getAdvanceStatus, requestAdvance } from "./advances"
+import { listOperatorInvoices } from "./operator"
 import { evaluateSubmission } from "./evaluation"
 import { getInvoiceDetail, listInvoices, registerInvoice } from "./invoices"
 import type { BackendDeps } from "./ports"
-import { AdvanceBody, CreateInvoiceBody, EvaluateBody, IdempotencyKey, InvoiceRefParam } from "./schemas"
+import { AdvanceBody, AdvanceRefParam, CreateInvoiceBody, EvaluateBody, IdempotencyKey, InvoiceRefParam } from "./schemas"
 
 /**
  * HTTP layer for the Phase 4 endpoints. Route files are one-line wrappers, so tests can drive these handlers with an
@@ -111,6 +112,26 @@ export async function handleAdvance(request: Request, ctx: HandlerContext): Prom
     const r = await requestAdvance(ctx.deps(), { userId: await ctx.userId(), invoiceId: body.data.invoiceId, idempotencyKey: key?.data })
     // 202: accepted and awaiting on-chain confirmation. 200: an existing request was returned.
     return ok(r, r.duplicate ? 200 : 202)
+  } catch (e) {
+    return toErrorResponse(e)
+  }
+}
+
+/** GET /api/advances/:id: a freelancer/client of the invoice polls one advance; it is settled against the chain first. */
+export async function handleGetAdvance(_request: Request, ctx: HandlerContext, params: { id: string }): Promise<Response> {
+  const p = AdvanceRefParam.safeParse(params)
+  if (!p.success) return errorResponse(404, "NOT_FOUND", "Advance request not found.")
+  try {
+    return ok(await getAdvanceStatus(ctx.deps(), { userId: await ctx.userId(), requestId: p.data.id }))
+  } catch (e) {
+    return toErrorResponse(e)
+  }
+}
+
+/** GET /api/operator/invoices: advances outstanding and disputes, for a wallet that holds OPERATOR_ROLE on-chain. */
+export async function handleOperatorInvoices(_request: Request, ctx: HandlerContext): Promise<Response> {
+  try {
+    return ok(await listOperatorInvoices(ctx.deps(), { userId: await ctx.userId() }))
   } catch (e) {
     return toErrorResponse(e)
   }

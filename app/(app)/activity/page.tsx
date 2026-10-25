@@ -14,13 +14,13 @@ export default function ActivityPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Activity" title="Transaction history" description={live ? "On-chain payment activity visible to your wallet." : "Every simulated payment-related action visible to your role."} />
+      <PageHeader eyebrow="Activity" title="Transaction history" description={live ? "Wallet transactions sent from this browser for the connected wallet." : "Every simulated payment-related action visible to your role."} />
       <Alert>
         <History />
-        <AlertTitle>{live ? "Not connected to the blockchain" : "Simulated transactions"}</AlertTitle>
+        <AlertTitle>{live ? "Sent from this browser" : "Simulated transactions"}</AlertTitle>
         <AlertDescription>
           {live
-            ? "Transaction history is read from the chain, which isn't connected yet, so nothing is listed. An empty list does not mean nothing happened on-chain."
+            ? "Each entry links to the blockchain explorer. A transaction shows as confirmed only after its receipt and expected event were verified on-chain; pending means it was sent but isn't final. This list covers transactions sent from this browser; the invoice pages also show payouts the platform made."
             : "These entries come from the in-browser demo ledger, so none has a blockchain hash or explorer link. Pending becomes confirmed only after the simulated confirmation; failed means nothing moved."}
         </AlertDescription>
       </Alert>
@@ -33,7 +33,7 @@ export default function ActivityPage() {
           ))}
         </div>
       ) : txs.data.length === 0 ? (
-        <EmptyState icon={History} title={live ? "No transaction data available" : "No transactions yet"} description={live ? "Confirmed on-chain transactions will appear here once the blockchain integration is connected." : "Actions like funding escrow or paying an advance appear here."} />
+        <EmptyState icon={History} title="No transactions yet" description={live ? "Transactions you send from this browser (creating, funding, approving, depositing) will appear here." : "Actions like funding escrow or paying an advance appear here."} />
       ) : (
         <TransactionList transactions={txs.data} showInvoice />
       )}

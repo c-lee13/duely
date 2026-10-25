@@ -31,7 +31,7 @@ import { buildSeedState } from "./fixtures"
 import * as ledger from "./ledger"
 import type { MockState, TxContext } from "./ledger"
 
-const STORAGE_KEY = "duely.mock-state.v1"
+const STORAGE_KEY = "duely.mock-state.v2"
 const READ_DELAY_MS = 250
 const WRITE_DELAY_MS = 600
 const TX_DELAY_MS = 1600
@@ -335,14 +335,19 @@ export class MockDuelyRepository implements DuelyRepository {
   async approveInvoice(invoiceId: InvoiceId): Promise<void> {
     const session = this.requireRole("client")
     const amount = ledger.findInvoice(this.load(), invoiceId).amount
-    await this.runTx({ action: "approveWork", from: session.wallet, invoiceId, amount }, (s, ctx) =>
+    await this.runTx({ action: "approveCompletion", from: session.wallet, invoiceId, amount }, (s, ctx) =>
       ledger.approveWork(s, session.wallet, invoiceId, ctx)
     )
   }
 
+  async resolveDispute(): Promise<void> {
+    // The simulated demo has no operator role; resolution exists only against the real contract (live mode).
+    throw new DomainError("NOT_IMPLEMENTED", "Dispute resolution is an operator action on the real contract; it isn't part of the simulated demo.")
+  }
+
   async disputeInvoice(invoiceId: InvoiceId): Promise<void> {
     const session = this.requireRole("client")
-    await this.runTx({ action: "disputeInvoice", from: session.wallet, invoiceId }, (s, ctx) =>
+    await this.runTx({ action: "raiseDispute", from: session.wallet, invoiceId }, (s, ctx) =>
       ledger.disputeInvoice(s, session.wallet, invoiceId, ctx)
     )
   }

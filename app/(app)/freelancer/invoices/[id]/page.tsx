@@ -31,11 +31,12 @@ import {
   SimulatedTag,
   SubmissionStatusBadge,
 } from "@/components/duely/primitives"
-import { useAction, useInvoiceBundle, useRepository } from "@/hooks/use-duely"
+import { useAction, useInvoiceBundle, usePollWhile, useRepository } from "@/hooks/use-duely"
 import type { AcceptanceCriterion, InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canSubmitEvidence, evaluationFor, getAdvanceEligibility } from "@/lib/frontend/eligibility"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES } from "@/lib/mocks/mock-repository"
 import { formatToken } from "@/lib/frontend/token"
+import { tryExplorerTxUrl } from "@/lib/chain/config"
 
 function Detail({ session, invoiceId }: { session: Session; invoiceId: string }) {
   const q = useInvoiceBundle(invoiceId, session.role)
@@ -50,12 +51,15 @@ function Detail({ session, invoiceId }: { session: Session; invoiceId: string })
     )
   }
   if (!q.data) return <PageSkeleton />
-  return <Body bundle={q.data} />
+  return <Body bundle={q.data} reload={q.reload} />
 }
 
-function Body({ bundle }: { bundle: InvoiceBundle }) {
+function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void }) {
   const toast = useToast()
   const isMock = useRepository().mode === "mock"
+  const sim = isMock ? " (simulated)" : ""
+  // A pending advance is settled by the server against the chain; keep asking until it is paid or failed.
+  usePollWhile(!isMock && bundle.advanceRequests[0]?.status === "pending", reload)
   const { invoice, submissions, evaluations, advanceRequests, timeline, transactions, reserveAvailable } = bundle
   const latest = submissions[0]
   const latestEval = evaluationFor(latest, evaluations)
@@ -69,7 +73,7 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
           eligible: false,
           blockers: [
             ...baseEligibility.blockers.filter((b) => !["INSUFFICIENT_RESERVE", "NOT_FUNDED"].includes(b.code)),
-            { code: "CHAIN_UNVERIFIED" as const, message: "The blockchain isn't connected, so on-chain funding and the platform reserve can't be verified. An advance can't be requested yet." },
+            { code: "CHAIN_UNVERIFIED" as const, message: "The blockchain couldn't be read just now, so on-chain funding and the platform reserve can't be verified. Try again in a moment." },
           ],
         }
       : baseEligibility
@@ -85,8 +89,8 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
     setConfirmAdvance(false)
     if (!r.ok) return toast({ tone: "error", title: "Advance request failed", description: r.error })
     if (r.value.status === "paid")
-      toast({ tone: "success", title: "Advance paid (simulated)", description: `${formatToken(eligibility.amount)} sent from the platform reserve.` })
-    else if (r.value.status === "pending") toast({ tone: "info", title: "Advance submitted", description: "Waiting for on-chain confirmation. Nothing is paid until it confirms." })
+      toast({ tone: "success", title: `Advance paid${sim}`, description: `${formatToken(eligibility.amount)} sent from the platform reserve.` })
+    else if (r.value.status === "pending") toast({ tone: "info", title: "Advance submitted", description: "Waiting for on-chain confirmation. Nothing is paid until it confirms; this page updates by itself." })
     else if (r.value.status === "denied") toast({ tone: "warning", title: "Advance denied", description: r.value.reason })
     else toast({ tone: "error", title: "Advance transaction failed", description: r.value.reason })
   }
@@ -177,6 +181,7 @@ function Body({ bundle }: { bundle: InvoiceBundle }) {
             invoiceStatus={invoice.onchainStatus}
             advanceAmount={invoice.advanceAmount}
             lastRequest={lastRequest}
+            simulated={isMock}
             onRequest={() => setConfirmAdvance(true)}
             reserveAvailable={reserveAvailable}
           />
@@ -287,9 +292,10 @@ function AdvanceCard(props: {
   pending: boolean
   invoiceStatus: string
   advanceAmount: string
-  lastRequest?: { status: string; reason?: string }
+  lastRequest?: { status: string; reason?: string; txHash?: string }
   onRequest: () => void
   reserveAvailable: string
+  simulated: boolean
 }) {
   const paid = props.invoiceStatus === "Advanced" || props.invoiceStatus === "Settled" || props.invoiceStatus === "Disputed"
   const wasPaid = props.advanceAmount !== "0"
@@ -313,10 +319,18 @@ function AdvanceCard(props: {
 
         {wasPaid && paid ? (
           <Pill tone="success" icon={CheckCircle2}>
-            Advance paid (simulated)
+            Advance paid{props.simulated ? " (simulated)" : " · confirmed on-chain"}
           </Pill>
         ) : props.pending || props.lastRequest?.status === "pending" ? (
-          <Pill tone="warning">Pending — waiting for simulated confirmation</Pill>
+          <div className="space-y-1">
+            <Pill tone="warning">{props.simulated ? "Pending — waiting for simulated confirmation" : "Pending — waiting for on-chain confirmation"}</Pill>
+            {props.lastRequest?.txHash && tryExplorerTxUrl(props.lastRequest.txHash) && (
+              <a className="block text-xs text-primary underline" href={tryExplorerTxUrl(props.lastRequest.txHash)!} target="_blank" rel="noreferrer">
+                View transaction on the explorer
+              </a>
+            )}
+            <p className="text-xs text-muted-foreground">Nothing is paid until the transaction is confirmed.</p>
+          </div>
         ) : (
           <>
             <Button size="lg" className="w-full" disabled={!props.eligible} onClick={props.onRequest}>

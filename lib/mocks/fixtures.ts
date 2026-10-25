@@ -4,7 +4,10 @@
  * All names, wallets and amounts are fictional demo-token values.
  */
 import type { CreateInvoiceInput } from "@/lib/frontend/domain"
-import { tokens } from "@/lib/frontend/token"
+import { MOCK_TOKEN, tokens as tokensOf } from "@/lib/frontend/token"
+
+/** Mock fixtures are always in the simulated DEMO token, whatever deployment the live app would use. */
+const tokens = (whole: number | bigint) => tokensOf(whole, MOCK_TOKEN)
 import { ACTORS } from "./actors"
 import { simulateEvaluation } from "./evaluator"
 import {

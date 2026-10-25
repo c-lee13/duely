@@ -13,9 +13,10 @@ import { RoleGate } from "@/components/duely/role-gate"
 import { useToast } from "@/components/duely/toast"
 import { AddressChip, Amount, ButtonLink, PageHeader, Pill, SimulatedTag } from "@/components/duely/primitives"
 import { useAction, useRepository } from "@/hooks/use-duely"
+import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import { ACTORS, nameForWallet } from "@/lib/mocks/actors"
 import type { Address } from "@/lib/frontend/domain"
-import { advanceFor, DEMO_TOKEN, parseTokenInput } from "@/lib/frontend/token"
+import { advanceFor, parseTokenInput, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
 
 interface CriterionDraft {
   key: number
@@ -31,8 +32,10 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
   const keyRef = React.useRef(3)
   const [step, setStep] = React.useState<"edit" | "review">("edit")
   const [title, setTitle] = React.useState("")
-  const [freelancer, setFreelancer] = React.useState<string>(ACTORS.freelancer.wallet)
-  const [amountText, setAmountText] = React.useState("1000")
+  const live = useRepository().mode === "api"
+  const progress = useTxProgress()
+  const [freelancer, setFreelancer] = React.useState<string>(live ? "" : ACTORS.freelancer.wallet)
+  const [amountText, setAmountText] = React.useState(live ? "1" : "1000")
   const [description, setDescription] = React.useState("")
   const [dueDate, setDueDate] = React.useState("")
   const [criteria, setCriteria] = React.useState<CriterionDraft[]>([
@@ -42,8 +45,9 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
   const [errors, setErrors] = React.useState<Errors>({})
 
   const create = useAction(async (repo, ...[input]: [Parameters<typeof repo.createInvoice>[0]]) => {
-    const invoice = await repo.createInvoice(input)
-    await repo.fundInvoice(invoice.invoiceId).catch((e) => {
+    progress.reset()
+    const invoice = await repo.createInvoice(input, progress.onProgress)
+    await repo.fundInvoice(invoice.invoiceId, progress.onProgress).catch((e) => {
       // Created but not funded: let the user retry funding from the detail page.
       toast({ tone: "warning", title: "Invoice created, funding not completed", description: e instanceof Error ? e.message : undefined })
     })
@@ -87,7 +91,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
       criteria: criteria.filter((c) => c.text.trim()).map((c) => ({ text: c.text, mandatory: c.mandatory })),
     })
     if (res.ok) {
-      toast({ tone: "success", title: "Invoice created and escrow funded (simulated)", description: "No real tokens moved." })
+      toast(live ? { tone: "success", title: "Invoice created and escrow funded", description: "Both transactions are confirmed on-chain." } : { tone: "success", title: "Invoice created and escrow funded (simulated)", description: "No real tokens moved." })
       router.push(`/client/invoices/${res.value.invoiceId}`)
     }
   }
@@ -108,7 +112,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
               <div>
                 <dt className="text-muted-foreground">Freelancer</dt>
                 <dd className="mt-0.5 min-w-0">
-                  <AddressChip address={freelancer} label={nameForWallet(freelancer)} />
+                  <AddressChip address={freelancer} label={live ? undefined : nameForWallet(freelancer)} />
                 </dd>
               </div>
               <div>
@@ -144,16 +148,28 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
                 ))}
               </ol>
             </div>
-            <Alert>
-              <Lock />
-              <AlertTitle className="flex items-center gap-2">
-                Simulated transactions <SimulatedTag />
-              </AlertTitle>
-              <AlertDescription>
-                Confirming runs two simulated steps: create the invoice, then lock <Amount value={amount} /> in escrow. No
-                wallet is used and no real funds move. DEMO tokens aren&apos;t RLUSD or real dollars.
-              </AlertDescription>
-            </Alert>
+            {live ? (
+              <Alert>
+                <Lock />
+                <AlertTitle>Real wallet transactions</AlertTitle>
+                <AlertDescription>
+                  MetaMask will ask you to confirm, in order: (1) create the invoice, (2) approve exactly <Amount value={amount} /> for the
+                  contract, (3) lock it in escrow. Duely also registers the invoice once the first one confirms. {tokenNotice()}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert>
+                <Lock />
+                <AlertTitle className="flex items-center gap-2">
+                  Simulated transactions <SimulatedTag />
+                </AlertTitle>
+                <AlertDescription>
+                  Confirming runs two simulated steps: create the invoice, then lock <Amount value={amount} /> in escrow. No
+                  wallet is used and no real funds move. DEMO tokens aren&apos;t RLUSD or real dollars.
+                </AlertDescription>
+              </Alert>
+            )}
+            {live && <TxProgressPanel steps={progress.steps} />}
             {create.error && (
               <Alert variant="destructive" role="alert">
                 <AlertTitle>Couldn&apos;t complete the transaction</AlertTitle>
@@ -167,7 +183,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
             <ArrowLeft /> Edit
           </Button>
           <Button size="lg" onClick={submit} disabled={create.pending}>
-            {create.pending ? "Confirming simulated transactions…" : (
+            {create.pending ? (live ? "Waiting for wallet and confirmation…" : "Confirming simulated transactions…") : (
               <>
                 <Check /> Create invoice &amp; fund escrow
               </>
@@ -197,11 +213,11 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
             <Field label="Title" error={errors.title} htmlFor="title">
               <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Investor pitch deck" aria-invalid={!!errors.title} aria-describedby={errors.title ? "title-err" : undefined} />
             </Field>
-            <Field label="Freelancer wallet" error={errors.freelancer} htmlFor="freelancer" hint="Demo wallet prefilled. Anyone using another address won't see this invoice.">
+            <Field label="Freelancer wallet" error={errors.freelancer} htmlFor="freelancer" hint={live ? "The freelancer's 0x wallet address. Only that wallet can submit evidence and request the advance." : "Demo wallet prefilled. Anyone using another address won't see this invoice."}>
               <Input id="freelancer" value={freelancer} onChange={(e) => setFreelancer(e.target.value)} className="font-mono text-base sm:text-xs" aria-invalid={!!errors.freelancer} aria-describedby={errors.freelancer ? "freelancer-err" : undefined} />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={`Amount (${DEMO_TOKEN.symbol} demo tokens)`} error={errors.amount} htmlFor="amount">
+              <Field label={`Amount (${tokenDisplay().symbol}${tokenDisplay().isDemoToken ? " demo tokens" : ""})`} error={errors.amount} htmlFor="amount">
                 <Input id="amount" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} aria-invalid={!!errors.amount} aria-describedby={errors.amount ? "amount-err" : undefined} />
               </Field>
               <Field label="Due date (optional)" htmlFor="due">
@@ -313,26 +329,6 @@ function Field({
   )
 }
 
-function LiveCreateUnavailable() {
-  return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <PageHeader eyebrow="New invoice" title="Creating invoices needs the blockchain" description="This isn't available in live mode yet." />
-      <Card>
-        <CardContent className="space-y-3 text-sm text-muted-foreground">
-          <p>
-            An invoice is created by a transaction from your wallet on the XRPL EVM chain; Duely then verifies that transaction and saves
-            the invoice. The deployed contract and wallet connection that make this possible aren&apos;t available yet, and Duely won&apos;t
-            invent an on-chain invoice.
-          </p>
-          <p>Invoices that already exist for your wallet appear on your dashboard.</p>
-          <ButtonLink href="/client" variant="outline">Back to invoices</ButtonLink>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
 export default function NewInvoicePage() {
-  const live = useRepository().mode === "api"
-  return <RoleGate role="client">{(session) => (live ? <LiveCreateUnavailable /> : <NewInvoice clientWallet={session.wallet} />)}</RoleGate>
+  return <RoleGate role="client">{(session) => <NewInvoice clientWallet={session.wallet} />}</RoleGate>
 }

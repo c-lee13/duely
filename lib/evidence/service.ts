@@ -1,4 +1,5 @@
 import type { Address, OnchainInvoiceStatus } from "@/lib/frontend/domain"
+import { invoiceInScope, type DeploymentScope } from "@/lib/shared/deployment-scope"
 import {
   contentMatchesType,
   DOWNLOAD_URL_TTL_SECONDS,
@@ -44,6 +45,7 @@ export type EvidenceErrorCode =
   | "CHAIN_UNAVAILABLE"
   | "SUBMISSION_LIMIT"
   | "TOO_MANY_UPLOADS"
+  | "WRONG_DEPLOYMENT"
 
 const STATUS: Record<EvidenceErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -63,6 +65,7 @@ const STATUS: Record<EvidenceErrorCode, number> = {
   CHAIN_UNAVAILABLE: 503,
   SUBMISSION_LIMIT: 409,
   TOO_MANY_UPLOADS: 429,
+  WRONG_DEPLOYMENT: 409,
 }
 
 export class EvidenceError extends Error {
@@ -157,6 +160,8 @@ export interface ChainFundingVerifier {
 export const noChainAdapter: ChainFundingVerifier = { verify: async () => ({ status: "unavailable" }) }
 
 export interface EvidenceDeps {
+  /** The one deployment this process serves; invoices of another deployment are refused. Required. */
+  scope: DeploymentScope
   db: EvidenceDb
   objects: EvidenceObjectStore
   chain: ChainFundingVerifier
@@ -195,6 +200,12 @@ async function loadPartyContext(deps: EvidenceDeps, userId: string, invoiceId: s
   const isClient = wallets.includes(invoice.client_address)
   const isFreelancer = wallets.includes(invoice.freelancer_address)
   if (!isClient && !isFreelancer) throw new EvidenceError("NOT_FOUND", "Invoice not found.")
+  if (!invoiceInScope(invoice, deps.scope)) {
+    throw new EvidenceError(
+      "WRONG_DEPLOYMENT",
+      `This invoice belongs to a different deployment than the one this server runs (${deps.scope.key.toUpperCase()}).`
+    )
+  }
   return { invoice, isClient, isFreelancer }
 }
 

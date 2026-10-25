@@ -1,14 +1,15 @@
 import type { Address, Bytes32 } from "@/lib/frontend/domain"
+import { UUID_RE } from "@/lib/evidence/policy"
 import { ApiError } from "./api-error"
 import { loadInvoiceAsParty, requireFreelancer, requireUser } from "./access"
 import { callChain } from "./invoices"
+import { reconcileAdvance } from "./reconcile"
+import { advanceAmountFor } from "@/lib/chain/amounts"
+import { computeEvaluationHash } from "@/lib/shared/evaluation-hash"
 import { DuplicateAdvanceError, type AdvanceRequestData, type BackendDeps, type ChainInvoiceState } from "./ports"
 
-export const ADVANCE_NUMERATOR = BigInt(90)
-export const ADVANCE_DENOMINATOR = BigInt(100)
-
-/** floor(amount * 90 / 100) in token base units. bigint only. */
-export const advanceAmountFor = (amount: bigint): bigint => (amount * ADVANCE_NUMERATOR) / ADVANCE_DENOMINATOR
+/** floor(amount * 9000 / 10000) in token base units: THE SDK's function (identical to the contract's), not a copy. */
+export { advanceAmountFor } from "@/lib/chain/amounts"
 
 export interface AdvanceResult {
   requestId: string
@@ -28,7 +29,7 @@ const view = (r: AdvanceRequestData, duplicate: boolean): AdvanceResult => ({
   duplicate,
 })
 
-function checkOnchainEligibility(state: ChainInvoiceState) {
+export function checkOnchainEligibility(state: ChainInvoiceState) {
   switch (state.onchainStatus) {
     case "Funded":
       break
@@ -40,6 +41,8 @@ function checkOnchainEligibility(state: ChainInvoiceState) {
       throw new ApiError("INVOICE_DISPUTED", "The invoice is disputed, so advances are frozen.")
     case "Settled":
       throw new ApiError("INVOICE_SETTLED", "The invoice is already settled.")
+    case "Cancelled":
+      throw new ApiError("INVOICE_CANCELLED", "The invoice was cancelled.")
   }
   if (state.advanceAmount > BigInt(0)) throw new ApiError("ALREADY_ADVANCED", "An advance was already paid for this invoice.")
 }
@@ -58,7 +61,7 @@ export async function requestAdvance(
   input: { userId: string | null; invoiceId: string; idempotencyKey?: string }
 ): Promise<AdvanceResult> {
   const userId = requireUser(input.userId)
-  const access = await loadInvoiceAsParty(deps.db, userId, input.invoiceId)
+  const access = await loadInvoiceAsParty(deps.db, userId, input.invoiceId, deps.scope)
   requireFreelancer(access, "request an advance")
   const { invoice } = access
 
@@ -71,7 +74,10 @@ export async function requestAdvance(
     }
   }
   const live = await deps.db.findLiveAdvance(invoice.id)
-  if (live) return view(live, true)
+  if (live) {
+    // A retry after an interruption is also the moment to settle the question: look at the chain before answering.
+    return view(await reconcileAdvance(deps, { request: live, invoice, waitMs: 0 }), true)
+  }
 
   // Latest submission and ITS evaluation: an older passing result can never authorize newer evidence.
   const submissions = await deps.db.listSubmissions(invoice.id)
@@ -106,6 +112,14 @@ export async function requestAdvance(
   if (state.amount !== BigInt(invoice.amount)) {
     throw new ApiError("INTEGRITY_MISMATCH", "The on-chain invoice amount doesn't match our records. This needs manual review.")
   }
+  // The contract's own record of the parties and the committed criteria must be what we registered and evaluated against.
+  if (
+    (state.freelancer !== undefined && state.freelancer.toLowerCase() !== invoice.freelancer_address) ||
+    (state.client !== undefined && state.client.toLowerCase() !== invoice.client_address) ||
+    (state.criteriaHash !== undefined && state.criteriaHash.toLowerCase() !== invoice.criteria_hash.toLowerCase())
+  ) {
+    throw new ApiError("INTEGRITY_MISMATCH", "The on-chain invoice's parties or criteria commitment don't match our records. This needs manual review.")
+  }
   const advance = advanceAmountFor(state.amount)
   const reserve = await callChain(() => deps.chain.getReserveAvailable())
   if (reserve < advance) {
@@ -131,9 +145,17 @@ export async function requestAdvance(
     throw e
   }
 
+  // The evaluation that authorizes this payout, committed on-chain with it. Deterministic, so it never needs storing.
+  const evaluationHash = computeEvaluationHash({
+    evaluationId: forLatest.id,
+    submissionId: latest.id,
+    criteriaHash: forLatest.criteria_hash,
+    score: forLatest.score as number,
+  })
+
   let sent: { txHash: Bytes32; from: Address }
   try {
-    sent = await deps.signer.submitApproveAdvance(ref)
+    sent = await deps.signer.submitApproveAdvance(ref, evaluationHash)
   } catch (e) {
     // Nothing was broadcast. Release the one-live-advance slot so the freelancer can retry.
     await deps.db.failAdvanceRequest(request.id, e instanceof Error ? e.message.slice(0, 200) : "signer failed").catch(() => undefined)
@@ -146,9 +168,25 @@ export async function requestAdvance(
     requestId: request.id,
     invoiceId: invoice.id,
     chainId: invoice.chain_id,
-    from: sent.from,
+    from: sent.from.toLowerCase() as Address, // stored lower-case (the database domain requires it)
     amount: advance.toString(),
     txHash: sent.txHash,
   })
-  return view(linked, false)
+  // Wait (bounded) for the receipt. `paid` appears only if the confirmed AdvancePaid event proves it; otherwise the answer is `pending`.
+  const settled = await reconcileAdvance(deps, { request: { ...linked, tx_from: sent.from }, invoice, waitMs: deps.confirmWaitMs ?? 0 })
+  return view(settled, false)
+}
+
+/**
+ * The current state of one advance request, for either party of its invoice. The request is first settled against the chain
+ * (receipt + event), so a poll after a restart or a slow confirmation reflects what actually happened on-chain.
+ */
+export async function getAdvanceStatus(deps: BackendDeps, input: { userId: string | null; requestId: string }): Promise<AdvanceResult & { reason: string | null }> {
+  const userId = requireUser(input.userId)
+  if (!UUID_RE.test(input.requestId)) throw new ApiError("NOT_FOUND", "Advance request not found.")
+  const request = await deps.db.getAdvanceRequest(input.requestId)
+  if (!request) throw new ApiError("NOT_FOUND", "Advance request not found.")
+  const { invoice } = await loadInvoiceAsParty(deps.db, userId, request.invoice_uuid, deps.scope)
+  const settled = await reconcileAdvance(deps, { request, invoice, waitMs: 0 }).catch(() => request)
+  return { ...view(settled, false), reason: settled.reason }
 }

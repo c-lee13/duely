@@ -42,6 +42,9 @@ export const EvaluateBody = z.object({ submissionId: uuid }).strict()
 /** POST /api/advances */
 export const AdvanceBody = z.object({ invoiceId: uuid }).strict()
 
+/** GET /api/advances/:id */
+export const AdvanceRefParam = z.object({ id: uuid })
+
 export const IdempotencyKey = z.string().regex(/^[A-Za-z0-9._:-]{8,200}$/)
 
 /** `:id` is the invoice's database UUID or its on-chain decimal id (resolved only among the caller's own invoices). */

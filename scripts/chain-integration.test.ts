@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, it } from "node:test"
+import { childEnv } from "../lib/chain/test/child-env"
 
 const scriptPath = fileURLToPath(
   new URL("./chain-integration.ts", import.meta.url)
@@ -26,11 +27,11 @@ function run(args: string[], env: Record<string, string> = {}) {
     ["--import", registerPath, scriptPath, ...args],
     {
       cwd: repoRoot,
-      env: {
+      env: childEnv({
         PATH: process.env.PATH ?? "",
         HOME: process.env.HOME ?? "",
         ...env,
-      },
+      }),
       encoding: "utf8",
       timeout: 60_000,
     }
@@ -231,7 +232,10 @@ describe("the fork rehearsal tool cannot touch the live chain", () => {
       ],
       {
         cwd: repoRoot,
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+        env: childEnv({
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+        }),
         encoding: "utf8",
         timeout: 60_000,
       }

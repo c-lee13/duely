@@ -2,8 +2,12 @@ import type { Address, Bytes32, OnchainInvoiceStatus, SubmissionStatus } from "@
 import { ApiError } from "./api-error"
 import { loadInvoiceAsParty, requireUser, requireVerifiedWallets } from "./access"
 import { UUID_RE } from "@/lib/evidence/policy"
+import { reconcileAdvance } from "./reconcile"
+import { invoiceInScope } from "@/lib/shared/deployment-scope"
 import { canonicalCriteriaString, computeCriteriaHash, normalizeCriteria, type CanonicalCriterion } from "./criteria"
 import {
+  ChainInvoiceNotFoundError,
+  ChainScopeError,
   ChainUnavailableError,
   type BackendDeps,
   type ChainInvoiceState,
@@ -18,6 +22,12 @@ export async function callChain<T>(fn: () => Promise<T>): Promise<T> {
   } catch (e) {
     if (e instanceof ChainUnavailableError) {
       throw new ApiError("INTEGRATION_UNAVAILABLE", "Blockchain integration isn't available yet, so this can't be verified or completed.")
+    }
+    if (e instanceof ChainScopeError) {
+      throw new ApiError("WRONG_DEPLOYMENT", "That belongs to a different deployment than the one this server runs.")
+    }
+    if (e instanceof ChainInvoiceNotFoundError) {
+      throw new ApiError("INTEGRITY_MISMATCH", "The invoice isn't on-chain, although we have a record of it. This needs manual review.")
     }
     throw new ApiError("CHAIN_ERROR", "The blockchain couldn't be read. Try again shortly.")
   }
@@ -89,6 +99,15 @@ export async function registerInvoice(deps: BackendDeps, input: CreateInvoiceInp
     throw new ApiError("CRITERIA_HASH_MISMATCH", "The acceptance criteria don't match the hash committed on-chain.")
   }
   if (creation.amount <= BigInt(0)) throw new ApiError("CHAIN_TX_INVALID", "The on-chain invoice amount is invalid.")
+  // The transaction must have created the invoice on THIS server's deployment, not another contract or token.
+  if (
+    !invoiceInScope(
+      { chain_id: creation.chainId, contract_address: creation.contractAddress, token_address: creation.tokenAddress },
+      deps.scope
+    )
+  ) {
+    throw new ApiError("WRONG_DEPLOYMENT", `That invoice was created on a different deployment than this server's (${deps.scope.key.toUpperCase()}).`)
+  }
 
   const state = await callChain(() =>
     deps.chain.getInvoiceState({ chainId: creation.chainId, contractAddress: creation.contractAddress, invoiceId: creation.invoiceId })
@@ -196,7 +215,7 @@ export interface InvoiceDetailView {
     fundingVerifiedOnchain: boolean
   }>
   evaluations: EvaluationView[]
-  advanceRequests: Array<{ requestId: string; status: string; amount: string; reason: string | null; txHash: string | null; createdAt: string }>
+  advanceRequests: Array<{ requestId: string; status: string; amount: string; reason: string | null; txHash: string | null; txFrom: string | null; createdAt: string }>
 }
 
 /**
@@ -207,7 +226,8 @@ async function resolveInvoiceRef(deps: BackendDeps, userId: string, ref: string)
   if (UUID_RE.test(ref)) return ref
   const wallets = await requireVerifiedWallets(deps.db, userId)
   if (!/^(0|[1-9][0-9]{0,77})$/.test(ref)) throw new ApiError("NOT_FOUND", "Invoice not found.")
-  const matches = await deps.db.findInvoicesByOnchainId(ref, wallets)
+  // On-chain ids repeat across deployments: only the active deployment's invoices can match, so a dUSD #1 never shadows an RLUSD #1.
+  const matches = (await deps.db.findInvoicesByOnchainId(ref, wallets)).filter((i) => invoiceInScope(i, deps.scope))
   if (matches.length === 0) throw new ApiError("NOT_FOUND", "Invoice not found.")
   if (matches.length > 1) throw new ApiError("AMBIGUOUS_INVOICE", "More than one of your invoices has that on-chain id. Use the invoice's UUID.")
   return matches[0].id
@@ -215,7 +235,15 @@ async function resolveInvoiceRef(deps: BackendDeps, userId: string, ref: string)
 
 export async function getInvoiceDetail(deps: BackendDeps, input: { userId: string | null; invoiceId: string }): Promise<InvoiceDetailView> {
   const userId = requireUser(input.userId)
-  const { invoice } = await loadInvoiceAsParty(deps.db, userId, await resolveInvoiceRef(deps, userId, input.invoiceId))
+  const { invoice } = await loadInvoiceAsParty(deps.db, userId, await resolveInvoiceRef(deps, userId, input.invoiceId), deps.scope)
+
+  // A refresh is the natural moment to settle any pending advance against the chain (idempotent, best-effort: a chain
+  // or database hiccup just leaves it pending, it is never turned into "paid" or "failed" without proof).
+  if (deps.chain.available && invoice.chain_id !== 0) {
+    for (const pending of await deps.db.listPendingAdvances(invoice.id)) {
+      await reconcileAdvance(deps, { request: pending, invoice, waitMs: 0 }).catch(() => undefined)
+    }
+  }
 
   const [criteria, submissions, evaluations, advances] = await Promise.all([
     deps.db.getCriteria(invoice.id),
@@ -261,7 +289,7 @@ export async function getInvoiceDetail(deps: BackendDeps, input: { userId: strin
       fundingVerifiedOnchain: s.funding_verified_onchain,
     })),
     evaluations: evaluations.map(toEvaluationView),
-    advanceRequests: advances.map((a) => ({ requestId: a.id, status: a.status, amount: a.amount, reason: a.reason, txHash: a.tx_hash, createdAt: a.created_at })),
+    advanceRequests: advances.map((a) => ({ requestId: a.id, status: a.status, amount: a.amount, reason: a.reason, txHash: a.tx_hash, txFrom: a.tx_from ?? null, createdAt: a.created_at })),
   }
 }
 
@@ -279,7 +307,7 @@ export interface InvoiceListView {
 export async function listInvoices(deps: BackendDeps, input: { userId: string | null }): Promise<InvoiceListView> {
   const userId = requireUser(input.userId)
   const wallets = await requireVerifiedWallets(deps.db, userId)
-  const invoices = await deps.db.listInvoicesForWallets(wallets)
+  const invoices = (await deps.db.listInvoicesForWallets(wallets)).filter((i) => invoiceInScope(i, deps.scope))
   const ids = invoices.map((i) => i.id)
   const [submissions, evaluations] = ids.length ? await Promise.all([deps.db.listSubmissionsForInvoices(ids), deps.db.listEvaluationsForInvoices(ids)]) : [[], []]
 

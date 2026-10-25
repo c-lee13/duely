@@ -23,6 +23,7 @@ import {
   type EvidenceDeps,
   type EvidenceErrorCode,
 } from "@/lib/evidence/service"
+import { TEST_SCOPE } from "./helpers/backend"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES as MOCK_MAX } from "@/lib/mocks/mock-repository"
 
 let db: PGlite
@@ -92,7 +93,7 @@ beforeEach(async () => {
   clock = new Clock()
   store = new FakeObjectStore(clock)
   chain = new FakeChain()
-  deps = { db: createPgEvidenceDb(db), objects: store, chain, requireChainVerification: false }
+  deps = { scope: TEST_SCOPE, db: createPgEvidenceDb(db), objects: store, chain, requireChainVerification: false }
 })
 
 async function rejects(p: Promise<unknown>, code: EvidenceErrorCode, label = "") {

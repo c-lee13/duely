@@ -1,5 +1,6 @@
 import type { Address, Bytes32, OnchainInvoiceStatus } from "@/lib/frontend/domain"
 import type { EvidenceObjectStore } from "@/lib/evidence/service"
+import type { DeploymentScope } from "@/lib/shared/deployment-scope"
 
 /**
  * Everything the backend services need from the outside world, as ports. Production wiring is in
@@ -12,6 +13,22 @@ export class ChainUnavailableError extends Error {
   constructor(message = "The blockchain integration is not available.") {
     super(message)
     this.name = "ChainUnavailableError"
+  }
+}
+
+/** The chain was reached but has no such invoice (or the transaction created none). Not an outage. */
+export class ChainInvoiceNotFoundError extends Error {
+  constructor(message = "The invoice does not exist on-chain.") {
+    super(message)
+    this.name = "ChainInvoiceNotFoundError"
+  }
+}
+
+/** A reference points at a chain/contract other than the deployment this server serves. Never read or acted on. */
+export class ChainScopeError extends Error {
+  constructor(message = "That reference belongs to a different deployment.") {
+    super(message)
+    this.name = "ChainScopeError"
   }
 }
 
@@ -42,6 +59,48 @@ export interface ChainInvoiceState {
   /** Actual amount advanced on-chain, 0 before an advance. */
   advanceAmount: bigint
   blockNumber: bigint
+  /** Parties and commitments as the contract records them. The real adapter always fills these; services verify them when present. */
+  client?: Address
+  freelancer?: Address
+  /** The contract's `metadataHash` (= our criteria hash). */
+  criteriaHash?: Bytes32
+  /** Non-zero once an advance was paid. */
+  evaluationHash?: Bytes32
+}
+
+/** Everything needed to look up (or rebuild after a restart) one broadcast `approveAdvance`. */
+export interface ChainAdvanceTxRef {
+  txHash: Bytes32
+  /** The evaluator account that sent it. */
+  from: Address
+  invoiceId: bigint
+  evaluationHash: Bytes32
+  /** When it was broadcast (ms since epoch), for the explorer/lifecycle record only. */
+  submittedAt: number
+}
+
+/** A verified view of a broadcast approveAdvance. `confirmed` means: mined, succeeded, and the expected AdvancePaid event was decoded. */
+export type ChainTxStatus =
+  | { state: "pending" }
+  | { state: "unknown"; reason: string }
+  | { state: "reverted"; blockNumber: bigint; reason: string }
+  | { state: "replaced"; reason: string }
+  | { state: "unverified"; reason: string }
+  | {
+      state: "confirmed"
+      blockNumber: bigint
+      blockHash: Bytes32
+      logIndex: number
+      /** The decoded AdvancePaid event arguments (what was actually paid, to whom, for which evaluation). */
+      paid: { invoiceId: bigint; freelancer: Address; amount: bigint; evaluationHash: Bytes32 }
+    }
+
+/** A paid advance found by scanning the chain's events, used to recover a transaction whose hash was never recorded. */
+export interface ChainAdvanceFound {
+  txHash: Bytes32
+  from: Address
+  blockNumber: bigint
+  evaluationHash: Bytes32
 }
 
 export interface ChainAdapter {
@@ -51,6 +110,15 @@ export interface ChainAdapter {
   getInvoiceState(ref: ChainInvoiceRef): Promise<ChainInvoiceState>
   /** Platform reserve available to advance, in token base units. */
   getReserveAvailable(): Promise<bigint>
+  /**
+   * Looks at a broadcast approveAdvance. `waitMs > 0` waits up to that long for a final answer; 0 is one non-blocking look.
+   * A final answer for a transaction that did not run (`reverted`, `replaced`) is the only thing that may release the slot.
+   */
+  getAdvanceTransaction(ref: ChainAdvanceTxRef, opts?: { waitMs?: number }): Promise<ChainTxStatus>
+  /** The AdvancePaid event of this invoice, if one exists (crash recovery). Null when the chain has none. */
+  findAdvancePaid(ref: ChainInvoiceRef): Promise<ChainAdvanceFound | null>
+  /** Whether `address` holds the contract role right now (the on-chain role, not a database flag). */
+  hasRole(role: "operator" | "evaluator" | "admin", address: Address): Promise<boolean>
 }
 
 export const unavailableChainAdapter: ChainAdapter = {
@@ -64,19 +132,37 @@ export const unavailableChainAdapter: ChainAdapter = {
   getReserveAvailable: async () => {
     throw new ChainUnavailableError()
   },
+  getAdvanceTransaction: async () => {
+    throw new ChainUnavailableError()
+  },
+  findAdvancePaid: async () => {
+    throw new ChainUnavailableError()
+  },
+  hasRole: async () => {
+    throw new ChainUnavailableError()
+  },
 }
 
 // ---- Authorized signer (never given to the AI; never imported by client code) ---------------------------------------
 
 export interface AdvanceSigner {
-  /** False until a protected signer integration exists. */
+  /** False when no evaluator key is configured or it is not the deployment's evaluator. Every method then throws ChainUnavailableError. */
   readonly available: boolean
-  /** Submits approveAdvance(invoiceId) from the platform role. Returns the broadcast hash; confirmation is reconciled separately. */
-  submitApproveAdvance(ref: ChainInvoiceRef): Promise<{ txHash: Bytes32; /** The platform signer's address (the on-chain sender). */ from: Address }>
+  /** The evaluator account's address, or null when unavailable. */
+  readonly address: Address | null
+  /**
+   * Submits approveAdvance(invoiceId, evaluationHash) from the EVALUATOR_ROLE account. Returns the broadcast hash; it never
+   * waits for or claims confirmation (that is reconciled from the receipt). Never retried by the signer.
+   */
+  submitApproveAdvance(
+    ref: ChainInvoiceRef,
+    evaluationHash: Bytes32
+  ): Promise<{ txHash: Bytes32; /** The evaluator's address (the on-chain sender). */ from: Address }>
 }
 
 export const unavailableSigner: AdvanceSigner = {
   available: false,
+  address: null,
   submitApproveAdvance: async () => {
     throw new ChainUnavailableError("The advance signer is not available.")
   },
@@ -231,6 +317,8 @@ export interface AdvanceRequestData {
   idempotency_key: string
   transaction_id: string | null
   tx_hash: Bytes32 | null
+  /** The sender recorded with the transaction (the evaluator account), when a transaction is linked. */
+  tx_from?: Address | null
   created_at: string
 }
 
@@ -262,6 +350,8 @@ export interface BackendDb {
   getInvoice(id: string): Promise<InvoiceData | null>
   /** Invoices where one of these (verified) wallets is the client or freelancer, newest first. */
   listInvoicesForWallets(addresses: Address[]): Promise<InvoiceData[]>
+  /** Every registered invoice of ONE deployment (chain + contract), newest first. Operator views only. */
+  listInvoicesInScope(scope: { chainId: number; contractAddress: string }, limit: number): Promise<InvoiceData[]>
   /** Same visibility rule, matched by on-chain id (may match several deployments). */
   findInvoicesByOnchainId(onchainId: string, addresses: Address[]): Promise<InvoiceData[]>
   listSubmissionsForInvoices(invoiceIds: string[]): Promise<SubmissionData[]> // newest first
@@ -318,10 +408,49 @@ export interface BackendDb {
     txHash: Bytes32
   }): Promise<AdvanceRequestData>
   failAdvanceRequest(id: string, reason: string): Promise<void>
+  getAdvanceRequest(id: string): Promise<AdvanceRequestData | null>
+  /** Pending requests of an invoice (at most one), with their transaction hash when one was recorded. */
+  listPendingAdvances(invoiceId: string): Promise<AdvanceRequestData[]>
+  /**
+   * A receipt-verified payout: the transaction becomes `confirmed` (with block data and the decoded event), the request
+   * becomes `paid`, and the invoice's chain cache is updated. Idempotent: safe to call again after a crash between steps.
+   */
+  recordAdvanceConfirmed(args: {
+    requestId: string
+    transactionId: string
+    invoiceId: string
+    blockNumber: bigint
+    blockHash: Bytes32
+    logIndex: number
+    receipt: Record<string, string>
+    advanceAmount: string
+    /** Fresh chain state to cache on the invoice, if it could be read. Absent = leave the cache alone. */
+    cache?: { status: OnchainInvoiceStatus; blockNumber: bigint }
+  }): Promise<AdvanceRequestData>
+  /** A definitive non-payment (reverted/replaced/never broadcast): transaction `failed` (if any), request `failed`, slot released. */
+  recordAdvanceFailed(args: { requestId: string; transactionId: string | null; reason: string }): Promise<void>
+  /** Keeps the request pending but records why it needs a person to look (e.g. an unverified receipt). */
+  noteAdvanceReview(requestId: string, reason: string): Promise<void>
+  /** Links a transaction recovered from the chain's events to a request that never recorded one. */
+  attachRecoveredTransaction(args: {
+    requestId: string
+    invoiceId: string
+    chainId: number
+    from: Address
+    amount: string
+    txHash: Bytes32
+  }): Promise<AdvanceRequestData>
   registerInvoice(args: RegisterInvoiceArgs): Promise<{ id: string; created: boolean }>
 }
 
 export interface BackendDeps {
+  /** The one deployment (chain + InvoiceAdvance + token) this process serves. Required: there is no unscoped mode. */
+  scope: DeploymentScope
+  /** How long POST /api/advances may wait for the receipt before answering `pending` (default 0: answer immediately). */
+  confirmWaitMs?: number
+  /** A pending request with no recorded transaction is only judged "never broadcast" after this long (default 120 s). */
+  neverBroadcastAfterMs?: number
+  now?: () => number
   db: BackendDb
   objects: EvidenceObjectStore
   chain: ChainAdapter

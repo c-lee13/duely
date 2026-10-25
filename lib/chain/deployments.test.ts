@@ -43,6 +43,7 @@ import {
 } from "./writes"
 import type { WriteContext } from "./writes"
 import { ADDR, allowanceKey, createMockChain } from "./test/mock-chain"
+import { childEnv } from "./test/child-env"
 
 const B = (n: number | string) => BigInt(n)
 
@@ -182,7 +183,10 @@ describe("deployment selection", () => {
       spawnSync(
         process.execPath,
         ["--import", register, "--input-type=module", "-e", script],
-        { encoding: "utf8", env: { PATH: process.env.PATH, ...env } }
+        {
+          encoding: "utf8",
+          env: childEnv({ PATH: process.env.PATH, ...env }),
+        }
       )
     const dusd = run({})
     assert.equal(dusd.status, 0, dusd.stderr)

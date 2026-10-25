@@ -35,6 +35,9 @@ export type ApiErrorCode =
   | "INSUFFICIENT_RESERVE"
   | "INTEGRITY_MISMATCH"
   | "SIGNER_FAILED"
+  // isolation / lifecycle
+  | "WRONG_DEPLOYMENT"
+  | "INVOICE_CANCELLED"
 
 const STATUS: Record<ApiErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -69,6 +72,8 @@ const STATUS: Record<ApiErrorCode, number> = {
   INSUFFICIENT_RESERVE: 409,
   INTEGRITY_MISMATCH: 409,
   SIGNER_FAILED: 502,
+  WRONG_DEPLOYMENT: 409,
+  INVOICE_CANCELLED: 409,
 }
 
 /** Error with a stable machine code and an HTTP status. Messages are safe to show to users: never put secrets or evidence in them. */

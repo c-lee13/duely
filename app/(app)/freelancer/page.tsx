@@ -21,7 +21,7 @@ import {
 import { useInvoices, useRepoQuery, useRepository, useTransactions } from "@/hooks/use-duely"
 import type { InvoiceDetail, OnchainInvoiceStatus, Session, TransactionRecord } from "@/lib/frontend/domain"
 import { evaluationFor, freelancerNextStep, getAdvanceEligibility, type FreelancerNextStep } from "@/lib/frontend/eligibility"
-import { advanceFor, isZero, sub, sum } from "@/lib/frontend/token"
+import { advanceFor, isZero, sub, sum, tokenNotice } from "@/lib/frontend/token"
 
 const NEXT: Record<FreelancerNextStep, { label: string; tone: "neutral" | "info" | "advance" | "success" | "warning" | "danger" }> = {
   await_funding: { label: "Waiting for client to fund", tone: "neutral" },
@@ -32,15 +32,17 @@ const NEXT: Record<FreelancerNextStep, { label: string; tone: "neutral" | "info"
   await_client: { label: "Awaiting client approval", tone: "info" },
   disputed: { label: "Disputed", tone: "danger" },
   paid: { label: "Paid", tone: "success" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
 }
 
-const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "Disputed", "Settled"]
+const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "Disputed", "Settled", "Cancelled"]
 const STATUS_HINT: Record<OnchainInvoiceStatus, string> = {
   Created: "Not funded yet",
   Funded: "Work in progress",
   Advanced: "Awaiting approval",
   Disputed: "Frozen",
   Settled: "Paid out",
+  Cancelled: "Cancelled by client",
 }
 
 /** Latest-evaluation pass + full advance eligibility, read from existing invoice bundles. */
@@ -143,7 +145,7 @@ function Dashboard({ session }: { session: Session }) {
   const received = sum(list.map((i) => i.freelancerReceived))
   // Live mode, chain not read: received/advance/pending figures are unknown, so none is shown.
   const unverified = list.some((i) => i.financialStatusVerified === false)
-  const NotConnected = <span className="text-base">Not connected</span>
+  const NotConnected = <span className="text-base">Unavailable</span>
   const advances = sum(list.map((i) => i.advanceAmount))
   const settlements = sub(received, advances)
   const open = list.filter((i) => i.onchainStatus === "Funded" || i.onchainStatus === "Advanced")
@@ -153,7 +155,7 @@ function Dashboard({ session }: { session: Session }) {
 
   const byId = new Map(list.map((i) => [i.invoiceId, i]))
   const recent = (txs.data ?? [])
-    .filter((t) => t.action === "approveAdvance" || t.action === "approveWork")
+    .filter((t) => t.action === "approveAdvance" || t.action === "approveCompletion")
     .sort((x, y) => y.createdAt.localeCompare(x.createdAt))
     .slice(0, 5)
 
@@ -189,11 +191,11 @@ function Dashboard({ session }: { session: Session }) {
                   {simulated && <SimulatedTag className="ml-1" />}
                 </p>
                 <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums sm:text-5xl">
-                  {unverified ? <span className="text-3xl">Not connected</span> : <Amount value={received} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />}
+                  {unverified ? <span className="text-3xl">Unavailable</span> : <Amount value={received} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />}
                 </p>
                 <p className="mt-1 max-w-md text-xs text-navy-foreground/70">
                   Advances come from the separate platform reserve; the rest is paid from escrow after the client
-                  approves. {simulated && "DEMO tokens have no real value."}
+                  approves. {tokenNotice()}
                 </p>
               </div>
               <dl className="relative mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">

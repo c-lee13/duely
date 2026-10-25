@@ -26,7 +26,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { OnchainInvoiceStatus, SubmissionStatus, TokenAmount, TxStatus } from "@/lib/frontend/domain"
-import { DEMO_TOKEN, formatToken } from "@/lib/frontend/token"
+import { formatToken, tokenDisplay } from "@/lib/frontend/token"
 import { shortHash } from "@/lib/frontend/criteria-digest"
 
 // ---- Links styled as buttons ------------------------------------------------
@@ -93,6 +93,7 @@ const ONCHAIN: Record<OnchainInvoiceStatus, { tone: Tone; icon: LucideIcon; labe
   Advanced: { tone: "advance", icon: Rocket, label: "90% advanced", hint: "Reserve advanced 90%; awaiting client approval" },
   Disputed: { tone: "danger", icon: AlertOctagon, label: "Disputed · frozen", hint: "Settlement frozen pending manual resolution" },
   Settled: { tone: "success", icon: CheckCircle2, label: "Settled", hint: "Client approved; escrow paid out" },
+  Cancelled: { tone: "neutral", icon: CircleDashed, label: "Cancelled", hint: "Cancelled by the client before funding" },
 }
 
 export function OnchainStatusBadge({ status, className }: { status: OnchainInvoiceStatus; className?: string }) {
@@ -156,7 +157,7 @@ export function Amount({
   return (
     <span className={cn("font-medium tabular-nums", className)} title={`${value} base units`}>
       {formatToken(value, { maxFraction, symbol: false })}
-      {!hideSymbol && <span className="ml-1 text-[0.8em] font-normal text-muted-foreground">{DEMO_TOKEN.symbol}</span>}
+      {!hideSymbol && <span className="ml-1 text-[0.8em] font-normal text-muted-foreground">{tokenDisplay().symbol}</span>}
     </span>
   )
 }

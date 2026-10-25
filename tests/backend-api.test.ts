@@ -5,7 +5,7 @@ import path from "node:path"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb, as } from "./helpers/db"
 import { bytes, Clock, FakeObjectStore } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator, unavailableDeps, type Harness } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator, TEST_SCOPE, unavailableDeps, type Harness } from "./helpers/backend"
 import { handleAdvance, handleCreateInvoice, handleEvaluate, handleGetInvoice } from "@/lib/backend/handlers"
 import { advanceAmountFor } from "@/lib/backend/advances"
 import { canonicalCriteriaString, computeCriteriaHash, type CanonicalCriterion } from "@/lib/backend/criteria"
@@ -73,7 +73,7 @@ beforeEach(async () => {
   const chain = new FakeChainAdapter()
   const signer = new FakeSigner()
   const evaluator = new ScriptedEvaluator()
-  h = { deps: { db: createPgBackendDb(db), objects: store, chain, signer, evaluator }, chain, signer, evaluator, store }
+  h = { deps: { scope: TEST_SCOPE, db: createPgBackendDb(db), objects: store, chain, signer, evaluator }, chain, signer, evaluator, store }
 })
 
 // ---- fixtures -------------------------------------------------------------------------------------------------
@@ -892,11 +892,14 @@ describe("security-sensitive wiring", () => {
     assert.match(fs.readFileSync("lib/backend/server.ts", "utf8"), /^import "server-only"/)
   })
 
-  it("the real-mode adapters shipped today are the 'unavailable' ones (no invented ABI, address or signer)", async () => {
+  it("the real-mode adapters come from the chain SDK and configuration (no invented ABI, address or signer)", async () => {
+    // Phase 3 replaced the 'unavailable' stubs: the chain reader is the SDK-backed adapter and the signer is built from
+    // EVALUATOR_PRIVATE_KEY (an absent/wrong key yields the explicit unavailable signer, never a mock).
     const src = fs.readFileSync("lib/backend/server.ts", "utf8")
-    assert.match(src, /getChainAdapter\(\): ChainAdapter \{\s*return unavailableChainAdapter/)
-    assert.match(src, /getAdvanceSigner\(\): AdvanceSigner \{\s*return unavailableSigner/)
+    assert.match(src, /getChainAdapter\(.*\): ChainAdapter \{\s*return createChainAdapter\(/)
+    assert.match(src, /getAdvanceSigner\(.*\): AdvanceSigner \{\s*return createEvaluatorSignerFromEnv\(/)
     assert.ok(!/0x[0-9a-fA-F]{40}/.test(src), "no hard-coded address")
+    assert.doesNotMatch(src, /from "@\/lib\/mocks|MockDuelyRepository/)
     assert.equal(disabledEvaluator.mode, "disabled")
   })
 })

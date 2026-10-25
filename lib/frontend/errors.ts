@@ -17,14 +17,26 @@ export type DomainErrorCode =
   | "NOT_IMPLEMENTED"
   | "UNAUTHENTICATED"
   | "INTEGRATION_UNAVAILABLE"
+  // browser wallet / transaction lifecycle (live mode)
+  | "NO_WALLET"
+  | "WALLET_NOT_CONNECTED"
+  | "WRONG_NETWORK"
+  | "WRONG_ACCOUNT"
+  | "USER_REJECTED"
+  | "TX_UNCONFIRMED"
+  | "TOKEN_PAUSED"
+  | "REGISTRATION_PENDING"
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode
+  /** The backend's own error code (for example CHAIN_TX_PENDING) when the error came from an API response. */
+  readonly apiCode?: string
 
-  constructor(code: DomainErrorCode, message: string) {
+  constructor(code: DomainErrorCode, message: string, apiCode?: string) {
     super(message)
     this.name = "DomainError"
     this.code = code
+    this.apiCode = apiCode
   }
 }
 

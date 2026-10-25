@@ -18,25 +18,30 @@ import {
 } from "@/components/duely/primitives"
 import { Amount } from "@/components/duely/primitives"
 import { useInvoices, useRepository, useTransactions } from "@/hooks/use-duely"
-import type { OnchainInvoiceStatus, Session, TransactionRecord, TxAction } from "@/lib/frontend/domain"
-import { sum } from "@/lib/frontend/token"
+import type { OnchainInvoiceStatus, Session, TransactionRecord } from "@/lib/frontend/domain"
+import { sum, tokenNotice } from "@/lib/frontend/token"
 
-const TX_LABEL: Record<TxAction, string> = {
+const TX_LABEL: Record<TransactionRecord["action"], string> = {
+  approve: "Allowance approved",
   createInvoice: "Invoice created",
   fundInvoice: "Escrow funded",
   depositReserve: "Reserve deposit",
   approveAdvance: "Advance released",
-  approveWork: "Work approved",
-  disputeInvoice: "Dispute raised",
+  approveCompletion: "Work approved",
+  raiseDispute: "Dispute raised",
+  cancelInvoice: "Invoice cancelled",
+  withdrawReserve: "Reserve withdrawal",
+  resolveDispute: "Dispute resolved",
 }
 
-const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "Disputed", "Settled"]
+const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "Disputed", "Settled", "Cancelled"]
 const STATUS_HINT: Record<OnchainInvoiceStatus, string> = {
   Created: "Awaiting funding",
   Funded: "In escrow",
   Advanced: "90% advanced",
   Disputed: "Frozen",
   Settled: "Complete",
+  Cancelled: "Cancelled before funding",
 }
 
 function ActivityRow({ tx, simulated }: { tx: TransactionRecord; simulated: boolean }) {
@@ -123,16 +128,16 @@ function Dashboard({ session }: { session: Session }) {
                   </p>
                   <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums sm:text-5xl">
                     {unverified ? (
-                      <span className="text-3xl">Not connected</span>
+                      <span className="text-3xl">Unavailable</span>
                     ) : (
                       <Amount value={locked} className="font-semibold [&>span]:text-base [&>span]:text-navy-foreground/70" />
                     )}
                   </p>
                   <p className="mt-1 max-w-sm text-xs text-navy-foreground/70">
                     {unverified
-                      ? "Escrow is read from the blockchain, which isn't connected yet, so no escrow balance is shown."
+                      ? "Escrow is read from the blockchain and that read isn't available right now, so no escrow balance is shown."
                       : "Held by the contract for open invoices. Not available to spend until you approve or the invoice settles."}{" "}
-                    {simulated && "DEMO tokens have no real value."}
+                    {tokenNotice()}
                   </p>
                 </div>
                 <ButtonLink

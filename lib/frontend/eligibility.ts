@@ -166,6 +166,7 @@ export type FreelancerNextStep =
   | "await_client"
   | "disputed"
   | "paid"
+  | "cancelled"
 
 export function freelancerNextStep(
   invoice: InvoiceDetail,
@@ -178,6 +179,8 @@ export function freelancerNextStep(
       return "disputed"
     case "Settled":
       return "paid"
+    case "Cancelled":
+      return "cancelled"
     case "Advanced":
       return "await_client"
     case "Funded":

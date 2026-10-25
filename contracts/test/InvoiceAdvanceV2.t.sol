@@ -152,17 +152,22 @@ contract InvoiceAdvanceV2Test is Test {
         assertEq(inv.evaluationHash, EVAL);
         assertEq(uint8(inv.status), uint8(IInvoiceAdvanceV2.InvoiceStatus.Advanced));
 
-        // 3. Client approves: vault gets 930 (900 + 30), freelancer the remaining 70.
+        // 3. Client approves: the vault is repaid 930 (900 + 30); the freelancer's remaining 70 is
+        // CREDITED and stays reserved in the escrow (pull payment).
         vm.expectEmit(true, false, false, true, address(escrow));
         emit IInvoiceAdvanceV2.InvoiceSettled(id, 900 * E18, 30 * E18, 70 * E18);
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit IInvoiceAdvanceV2.ProceedsCredited(id, freelancer, 70 * E18);
         vm.prank(client);
         escrow.approveCompletion(id);
         Balances memory s3 = _bal();
         assertEq(s3.client, 9000 * E18, "client paid 1,000 total");
-        assertEq(s3.freelancer, 970 * E18, "freelancer 900 + 70");
+        assertEq(s3.freelancer, 900 * E18, "nothing pushed to the freelancer yet");
         assertEq(s3.vault, 4030 * E18, "vault 3100 + 930");
-        assertEq(s3.escrow, 0);
+        assertEq(s3.escrow, 70 * E18, "the 70 stays reserved in the escrow");
         assertEq(escrow.totalEscrow(), 0);
+        assertEq(escrow.claimable(freelancer), 70 * E18);
+        assertEq(escrow.totalClaimable(), 70 * E18);
         assertEq(_sum(s3), total0, "exact conservation");
         assertEq(vault.outstandingPrincipal(), 0);
         assertEq(vault.totalAssets(), 4030 * E18, "NAV +30");
@@ -170,6 +175,17 @@ contract InvoiceAdvanceV2Test is Test {
         assertEq(vault.totalRealizedLosses(), 0);
         assertEq(uint8(vault.getAdvance(id).status), uint8(IDuelyVault.AdvanceStatus.Repaid));
         assertEq(uint8(_status(id)), uint8(IInvoiceAdvanceV2.InvoiceStatus.Settled));
+
+        // 4. Anyone may trigger the claim; the money still goes to the freelancer.
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit IInvoiceAdvanceV2.ProceedsClaimed(freelancer, stranger, 70 * E18);
+        vm.prank(stranger);
+        escrow.claim(freelancer);
+        Balances memory s4 = _bal();
+        assertEq(s4.freelancer, 970 * E18, "900 + 70");
+        assertEq(s4.escrow, 0);
+        assertEq(escrow.totalClaimable(), 0);
+        assertEq(_sum(s4), total0);
         // LP value: +0.75% pro rata.
         assertApproxEqAbs(_lpValue(lp1), 3022.5e18, 2);
         assertApproxEqAbs(_lpValue(lp2), 1007.5e18, 2);
@@ -182,6 +198,9 @@ contract InvoiceAdvanceV2Test is Test {
         emit IInvoiceAdvanceV2.InvoiceSettled(id, 0, 0, 1000 * E18);
         vm.prank(client);
         escrow.approveCompletion(id);
+        assertEq(escrow.claimable(freelancer), 1000 * E18, "credited, still reserved in the escrow");
+        assertEq(_bal().escrow, 1000 * E18);
+        escrow.claim(freelancer);
         Balances memory s = _bal();
         assertEq(s.freelancer, 1000 * E18);
         assertEq(s.client, 9000 * E18);
@@ -230,6 +249,7 @@ contract InvoiceAdvanceV2Test is Test {
         emit IInvoiceAdvanceV2.InvoiceSettled(id, 900 * E18, 30 * E18, 70 * E18);
         vm.prank(operator);
         escrow.resolveDispute(id, true);
+        escrow.claim(freelancer);
 
         Balances memory s = _bal();
         assertEq(s.client, 9000 * E18);
@@ -255,17 +275,25 @@ contract InvoiceAdvanceV2Test is Test {
         vm.prank(operator);
         escrow.resolveDispute(id, false);
 
+        // Ruling recorded; the refund is credited, not yet paid.
+        Balances memory mid = _bal();
+        assertEq(mid.client, 9000 * E18);
+        assertEq(mid.escrow, 1000 * E18, "refund reserved in the escrow");
+        assertEq(escrow.claimable(client), 1000 * E18);
+        assertEq(escrow.totalEscrow(), 0);
+        assertEq(vault.totalRealizedLosses(), 900 * E18, "loss does not wait for the claim");
+
+        escrow.claim(client);
         Balances memory s = _bal();
         assertEq(s.client, 10_000 * E18, "client refunded the full 1,000");
         assertEq(s.freelancer, 900 * E18, "advance is never clawed back");
         assertEq(s.vault, 3100 * E18, "vault does not recover any cash");
         assertEq(s.escrow, 0);
         assertEq(_sum(s), total0);
-        assertEq(escrow.totalEscrow(), 0);
+        assertEq(escrow.totalClaimable(), 0);
 
         assertEq(vault.outstandingPrincipal(), 0);
         assertEq(vault.totalAssets(), 3100 * E18, "NAV -900, exactly once");
-        assertEq(vault.totalRealizedLosses(), 900 * E18);
         assertEq(vault.totalFeesEarned(), 0, "no fee on a loss");
         IDuelyVault.Advance memory a = vault.getAdvance(id);
         assertEq(uint8(a.status), uint8(IDuelyVault.AdvanceStatus.Lost));
@@ -283,6 +311,7 @@ contract InvoiceAdvanceV2Test is Test {
         escrow.raiseDispute(id);
         vm.prank(operator);
         escrow.resolveDispute(id, false);
+        escrow.claim(client);
 
         Balances memory s = _bal();
         assertEq(s.client, 10_000 * E18);
@@ -571,23 +600,25 @@ contract InvoiceAdvanceV2Test is Test {
         assertEq(vault.totalAssets(), 4030 * E18);
     }
 
-    function test_refund_failedTransfer_doesNotRecordLoss() public {
+    /// @dev Pull payments: the refund ruling no longer moves tokens, so an issuer pause cannot block it or
+    /// the loss recognition; the client's credit survives until the token works again.
+    function test_refund_isCredited_issuerPauseCannotBlockRulingOrLoseTheClaim() public {
         uint256 id = _advanced(1000 * E18);
         vm.prank(client);
         escrow.raiseDispute(id);
-        bytes32 snap = _snapshot(id);
         rlusd.pause();
         vm.prank(operator);
-        vm.expectRevert();
         escrow.resolveDispute(id, false);
-        rlusd.unpause();
-        assertEq(_snapshot(id), snap);
-        assertEq(vault.totalRealizedLosses(), 0, "loss not recorded without the refund");
-        assertEq(uint8(_status(id)), uint8(IInvoiceAdvanceV2.InvoiceStatus.Disputed));
+        assertEq(vault.totalRealizedLosses(), 900 * E18, "loss recorded despite the pause");
+        assertEq(uint8(_status(id)), uint8(IInvoiceAdvanceV2.InvoiceStatus.Cancelled));
+        assertEq(escrow.claimable(client), 1000 * E18);
 
-        vm.prank(operator);
-        escrow.resolveDispute(id, false);
-        assertEq(vault.totalRealizedLosses(), 900 * E18);
+        vm.expectRevert();
+        escrow.claim(client);
+        assertEq(escrow.claimable(client), 1000 * E18, "failed claim destroys nothing");
+        rlusd.unpause();
+        escrow.claim(client);
+        assertEq(rlusd.balanceOf(client), 10_000 * E18);
     }
 
     function test_fundInvoice_failures_leaveInvoiceCreated() public {
@@ -690,8 +721,11 @@ contract InvoiceAdvanceV2Test is Test {
 
         assertEq(vault.outstandingPrincipal(), 0);
         assertEq(vault.totalAssets(), 4000 * E18 + 60 * E18 - 900 * E18);
-        assertEq(rlusd.balanceOf(address(escrow)), 0);
         assertEq(escrow.totalEscrow(), 0);
+        assertEq(rlusd.balanceOf(address(escrow)), escrow.totalClaimable(), "only credits remain");
+        escrow.claim(freelancer);
+        escrow.claim(client);
+        assertEq(rlusd.balanceOf(address(escrow)), 0);
         assertEq(rlusd.balanceOf(address(vault)), vault.totalAssets(), "all principal back as cash");
     }
 
@@ -726,6 +760,7 @@ contract InvoiceAdvanceV2Test is Test {
         escrow.approveAdvance(tiny, EVAL);
         vm.prank(client);
         escrow.approveCompletion(tiny);
+        escrow.claim(freelancer);
         assertEq(rlusd.balanceOf(freelancer), 1);
 
         // 4 wei: advance 3, fee 0, remainder 1.
@@ -734,6 +769,7 @@ contract InvoiceAdvanceV2Test is Test {
         assertEq(escrow.getInvoice(small).advanceFee, 0);
         vm.prank(client);
         escrow.approveCompletion(small);
+        escrow.claim(freelancer);
         assertEq(rlusd.balanceOf(freelancer), 1 + 3 + 1);
         assertEq(vault.getAdvance(small).feeEarned, 0);
         assertEq(vault.totalAssets(), 4000 * E18, "zero fee, NAV unchanged");
@@ -817,6 +853,10 @@ contract InvoiceAdvanceV2Test is Test {
             escrow.resolveDispute(id, outcome == 1);
         }
 
+        // Everything credited is still reserved in the escrow until claimed.
+        assertEq(rlusd.balanceOf(address(escrow)), escrow.totalClaimable());
+        if (escrow.claimable(freelancer) > 0) escrow.claim(freelancer);
+        if (escrow.claimable(client) > 0) escrow.claim(client);
         Balances memory s = _bal();
         assertEq(rlusd.totalSupply(), supply);
         assertEq(_sum(s), _sum(s0), "no value created or destroyed");

@@ -124,12 +124,16 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
         return paused() ? 0 : super.maxMint(receiver);
     }
 
-    /// @notice Shares redeemable right now: the owner's balance, capped by what the vault's
-    /// actual token balance can pay. 0 while fully paused. `maxWithdraw` follows from this.
+    /// @notice Shares redeemable right now: the owner's balance, capped by `withdrawableLiquidity()`
+    /// (cash that can leave without pushing utilization above the 80% cap). 0 while fully paused.
+    /// `maxWithdraw` follows from this (it is `previewRedeem(maxRedeem)`), so both are conservative:
+    /// shares are rounded down, so the assets they redeem never exceed the cap.
     function maxRedeem(address owner_) public view override(ERC4626, IERC4626) returns (uint256) {
         if (paused()) return 0;
         return
-            Math.min(balanceOf(owner_), _convertToShares(availableLiquidity(), Math.Rounding.Floor));
+            Math.min(
+                balanceOf(owner_), _convertToShares(withdrawableLiquidity(), Math.Rounding.Floor)
+            );
     }
 
     function _decimalsOffset() internal pure override returns (uint8) {
@@ -146,7 +150,7 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
     }
 
     // ---------------------------------------------------------------------
-    // Advance flow: not implemented until A3/A4
+    // Advance flow (escrow-only)
     // ---------------------------------------------------------------------
 
     /// @notice Escrow-only. Pays `principal` from the vault's cash to `freelancer` and records
@@ -261,8 +265,11 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
     // ---------------------------------------------------------------------
 
     /// @notice One-time authorization of the escrow. The escrow must point back at this vault, use
-    /// the same payment token and the same fee/advance schedule, so a misconfigured or foreign
-    /// contract cannot be authorized. The right is spent only by a successful call.
+    /// the same payment token and the same fee/advance schedule. This catches miswiring; it does
+    /// NOT authenticate the contract: a malicious admin could authorize a contract that merely
+    /// mimics these views, so the admin is trusted for this single call (deploy scripts must verify
+    /// the escrow's bytecode and the admin should be a multisig). The right is spent only by a
+    /// successful call.
     function setEscrow(address escrow_) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (escrow != address(0)) revert EscrowAlreadySet();
         if (escrow_ == address(0) || escrow_.code.length == 0) revert InvalidAddress();
@@ -271,8 +278,8 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
         emit EscrowSet(escrow_);
     }
 
-    /// @notice Full emergency pause: blocks deposits, mints, withdrawals and redemptions (and,
-    /// from A3, advance funding). Repayment and loss finalization will never be blocked.
+    /// @notice Full emergency pause: blocks deposits, mints, withdrawals, redemptions and advance
+    /// funding. Repayment and loss finalization are never blocked.
     function pause() external {
         _checkPauserOrOperator();
         _pause();
@@ -312,6 +319,19 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
 
     function availableLiquidity() public view returns (uint256) {
         return IERC20(asset()).balanceOf(address(this));
+    }
+
+    /// @notice The most assets all LPs together can withdraw right now: cash minus a buffer that keeps
+    /// outstanding principal at or below 80% of NAV after the withdrawal. A withdrawal of `w` lowers
+    /// NAV and cash by exactly `w`, so the condition `P * 10000 <= 8000 * (NAV - w)` gives
+    /// `w <= cash - ceil(P * (10000 - 8000) / 8000)`; the buffer is rounded UP. 0 when utilization is
+    /// already at or above the cap (for example after a loss). Independent of the pause flags.
+    function withdrawableLiquidity() public view returns (uint256) {
+        uint256 cash = availableLiquidity();
+        uint256 buffer = Math.mulDiv(
+            outstandingPrincipal, BPS - MAX_UTILIZATION_BPS, MAX_UTILIZATION_BPS, Math.Rounding.Ceil
+        );
+        return cash > buffer ? cash - buffer : 0;
     }
 
     function utilizationBps() external view returns (uint256) {

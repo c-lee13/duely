@@ -44,12 +44,16 @@ interface IInvoiceAdvanceV2 {
         uint256 fee,
         bytes32 evaluationHash
     );
+    /// @param freelancerCredited remainder credited to the freelancer's claimable balance (pull payment).
     event InvoiceSettled(
         uint256 indexed invoiceId,
         uint256 vaultPrincipalRepaid,
         uint256 vaultFeePaid,
-        uint256 freelancerPaid
+        uint256 freelancerCredited
     );
+    /// @notice Escrow RLUSD reserved for `recipient` (freelancer remainder or client refund).
+    event ProceedsCredited(uint256 indexed invoiceId, address indexed recipient, uint256 amount);
+    event ProceedsClaimed(address indexed recipient, address indexed caller, uint256 amount);
     event InvoiceDisputed(
         uint256 indexed invoiceId, address indexed client, uint256 advanceAlreadyPaid
     );
@@ -65,6 +69,7 @@ interface IInvoiceAdvanceV2 {
     error ZeroAdvance();
     error UnsupportedTokenBehavior();
     error VaultMismatch();
+    error NothingToClaim(address recipient);
 
     function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash)
         external
@@ -76,7 +81,12 @@ interface IInvoiceAdvanceV2 {
     function raiseDispute(uint256 invoiceId) external;
     function resolveDispute(uint256 invoiceId, bool releaseToFreelancer) external;
 
+    /// @notice Permissionless: pays `recipient`'s whole claimable balance to `recipient` (never elsewhere).
+    function claim(address recipient) external returns (uint256 amount);
+
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory);
+    function claimable(address recipient) external view returns (uint256);
+    function totalClaimable() external view returns (uint256);
     function quoteAdvance(uint256 amount)
         external
         pure

@@ -11,8 +11,8 @@ Replace the platform-funded reserve with **RLUSD supplied by external liquidity 
 - Clients escrow invoice funds in `InvoiceAdvanceV2`, as in V1.
 - Freelancers submit work. The existing AI/risk pipeline evaluates eligibility, unchanged.
 - The `EVALUATOR_ROLE` signer calls `approveAdvance` on the **escrow**. The escrow instructs the vault to pay the freelancer.
-- On approval, escrow repays vault **principal + financing fee**; the remainder goes to the freelancer.
-- On a dispute the client wins, the client is refunded in full and the vault **recognizes the loss of the whole principal**. LPs bear it through a lower share price.
+- On approval, escrow repays vault **principal + financing fee**; the remainder is **credited to the freelancer** as a claimable balance (pull payment, §4.6b).
+- On a dispute the client wins, the client is **credited a full refund** (claimable) and the vault **recognizes the loss of the whole principal**. LPs bear it through a lower share price.
 - LPs deposit RLUSD and receive transferable ERC-20 shares, **`Duely Vault Share` (`dvRLUSD`)**. Shares are a proportional claim on net vault assets, **not** a claim on specific invoices and **not** a guaranteed redemption amount.
 
 ### Worked example (approved invoice, 1,000 RLUSD)
@@ -29,7 +29,7 @@ Replace the platform-funded reserve with **RLUSD supplied by external liquidity 
 
 ### Worked example (disputed, client wins)
 
-Freelancer received 900 from the vault. Client wins the dispute and is refunded the full 1,000 escrow. The vault recovers 0, so it recognizes a **900 loss** and no fee. NAV falls by 900. The advance is never treated as repaid.
+Freelancer received 900 from the vault. Client wins the dispute and is credited the full 1,000 escrow (claimable). The vault recovers 0, so it recognizes a **900 loss** and no fee. NAV falls by 900. The advance is never treated as repaid.
 
 ### Worked example (disputed, freelancer wins)
 
@@ -61,6 +61,12 @@ Normal settlement: identical to the approved case (930 to the vault, 70 to the f
 | C6 | Impairment | `I = 0` confirmed. Losses reduce outstanding principal exactly once; no separate impairment deduction. Par carrying value may overstate realizable NAV before disputes resolve. | §4.2 |
 | C7 | Stuck invoices | No timeout in V2. Explicit limitation plus an A3/A4 design decision. No operator write-off or unilateral escrow refund. | §9.1 |
 | C8 | Ownership | Person A owns Solidity, generated ABIs and deployment manifests. Person B consumes the exported ABIs and owns frontend/backend. | §7, §8 |
+| C9 | Withdrawal cap (A5.5, D3) | Withdrawals can never push utilization above 80%: `withdrawable = cash − ceil(P/4)`. Implemented. | §4.4 |
+| C10 | Pull payments (A5.5, D4) | Freelancer remainders and client refunds are credited and reserved in the escrow; a permissionless `claim(recipient)` pays only that recipient. Implemented. | §4.6b |
+| C11 | Disputed advances (D1) | Operational pause runbook only; no automatic freeze, no impairment accounting. Documented. | §9.1, `V2_SECURITY_REVIEW.md` |
+| C12 | Fee sniping (D2) | Acknowledged MVP risk; no holding period. Documented. | §9.1 |
+| C13 | Admin roles (D5) | Testnet admin roles stay as deployed; multisig and stronger controls are required before production. Documented. | §9.1 |
+| C14 | Invoice timeout (D6) | None until a dispute/expiry policy is specified. Documented. | §9.1 |
 
 ### Resolutions of A1 ambiguities (derived from the decisions above)
 
@@ -150,7 +156,9 @@ totalAssets() = B + P - I          with I == 0 in V2
 
 ### 4.4 Withdrawals
 
-- Withdrawals are paid only from the vault's actual RLUSD balance: `availableLiquidity() = B`. `maxWithdraw(owner) = min(convertToAssets(balanceOf(owner)), B)` and `maxRedeem(owner) = min(balanceOf(owner), convertToShares(B))`. `redeem`/`withdraw` above the cap revert with the standard ERC-4626 `ERC4626ExceededMax*` errors. No queue, no partial fills, and no promise of instant withdrawal while capital is deployed.
+- Withdrawals are paid only from the vault's actual RLUSD balance **and may never push utilization above 80%** (A5.5, D3). A withdrawal of `w` lowers cash and NAV by exactly `w`, so utilization stays within the cap iff `P * 10000 <= 8000 * (NAV − w)`, i.e. `w <= cash − ceil(P * (10000 − 8000) / 8000) = cash − ceil(P / 4)`. The vault exposes this as `withdrawableLiquidity()` (0 when cash does not exceed the buffer, which includes any time utilization is already at or above 80%). The buffer is rounded **up**.
+- `maxRedeem(owner) = min(balanceOf(owner), convertToShares(withdrawableLiquidity()))` (shares rounded down) and `maxWithdraw(owner) = previewRedeem(maxRedeem(owner))`, so the assets of any permitted exit never exceed the cap. `redeem`/`withdraw` above these revert with the standard ERC-4626 `ERC4626ExceededMax*` errors. With no principal outstanding, everything in cash is withdrawable. No queue, no partial fills, and no promise of instant withdrawal while capital is deployed.
+- Consequences: roughly a quarter of the outstanding principal must stay behind as cash; if NAV falls without principal falling (an issuer clawback from the vault), exits stay locked until deposits or repayments restore utilization to 80% or below. A loss lowers NAV and principal together and so never creates a breach. The cap bounds **total** utilization, not per-invoice concentration (see S-03 in `V2_SECURITY_REVIEW.md`).
 - Both return 0 while the vault is fully paused (§4.8). The advance-only pause does not affect them.
 
 ### 4.5 Risk limits (constants, in the vault)
@@ -162,7 +170,7 @@ totalAssets() = B + P - I          with I == 0 in V2
 | `MAX_INVOICE_EXPOSURE_BPS` | 2500 | `principal * 10000 <= totalAssets() * 2500` |
 | (liquidity) | n/a | `principal <= availableLiquidity()` (token balance) |
 
-`totalAssets()` is measured **before** the advance (the advance leaves NAV unchanged). The limits apply at funding time only; a later NAV drop can push utilization above 80% without anything breaking, it just blocks further advances. `utilizationBps() = P * 10000 / totalAssets()` (0 if NAV is 0). Rounding in all checks uses the multiplication-first form above (no division-before-multiplication).
+`totalAssets()` is measured **before** the advance (the advance leaves NAV unchanged). The funding limits are checked at funding time; a later NAV drop (an issuer clawback) can push utilization above 80% without anything breaking, which blocks further advances and, per §4.4, all withdrawals until it is cured. Withdrawals themselves can no longer cause a breach. `utilizationBps() = P * 10000 / totalAssets()` (0 if NAV is 0). Rounding in all checks uses the multiplication-first form above (no division-before-multiplication).
 
 **A3 implementation notes.** `fundAdvance` checks, in order: escrow configured and caller is the escrow; full pause and advance-only pause; freelancer is not zero, the vault, the escrow or the token; `invoiceAmount` and `principal` nonzero; no existing advance for the invoice; `principal <= floor(invoiceAmount * 9000 / 10000)`; `fee == floor(invoiceAmount * FEE_BPS / 10000)` (the vault re-validates the fee the escrow quotes, so an escrow bug cannot mis-price a repayment); `principal <= cash`; the two NAV caps. The escrow is the trust anchor for `invoiceAmount` and `freelancer` (it is the only caller and cannot be changed once set); no V2 interface change is needed for the 90% check. Because `cash = NAV − P` exactly and utilization is capped below 100%, `principal <= cash` is always implied by the utilization cap, so `InsufficientLiquidity` is unreachable and kept only as defence in depth. `maxAdvanceNow()` is computed from the same caps as `fundAdvance` (it excludes the invoice-specific 90% term).
 
@@ -174,10 +182,19 @@ totalAssets() = B + P - I          with I == 0 in V2
 |---|---|
 | `approveCompletion` (client) | `recordRepayment`: `P -= principal`, balance `+= principal + fee` (verified by balance delta), advance `Repaid`, `feeEarned = fee` |
 | `resolveDispute(true)` (operator) | Same as approval |
-| `resolveDispute(false)` | Escrow refunds full amount to the client; `finalizeLoss`: `P -= principal`, `totalRealizedLosses += principal`, advance `Lost`, `loss = principal`, fee not earned |
+| `resolveDispute(false)` | Escrow **credits** the full amount to the client (claimable, §4.6b); `finalizeLoss`: `P -= principal`, `totalRealizedLosses += principal`, advance `Lost`, `loss = principal`, fee not earned |
 | No advance taken | No vault call in any outcome |
 
 A prior advance is never clawed back from the freelancer.
+
+### 4.6b Pull payments (A5.5, D4)
+
+- The escrow pays **only the vault** directly (the repayment, pulled by the vault with a balance-delta check). Everything owed to a person is **credited**: `claimable[recipient] += amount`, `totalClaimable += amount`, event `ProceedsCredited(invoiceId, recipient, amount)`. No tokens move at credit time; they stay reserved in the escrow.
+- Credits arise from: the freelancer's remainder on approval or a release ruling (`amount − advance − fee`, or the full amount with no advance) and the client's full refund on a client-win ruling.
+- **`claim(address recipient)` is permissionless** and pays the recipient's whole claimable balance **to the recipient and nowhere else**; the caller only chooses when. The credit is zeroed before the transfer; if the transfer fails (issuer pause, blacklist) the call reverts and the credit is intact. There is deliberately no "claim to another address": redirecting around an issuer blacklist would defeat the issuer's compliance control, so funds owed to a permanently blocked address stay stuck.
+- Settlement, release and refund rulings no longer depend on whether the payee can receive tokens. They only fail if the **vault repayment** fails (a token-level problem affecting the vault). In particular a blacklisted freelancer can no longer force an LP loss, and a blacklisted client cannot block the refund ruling or the loss recognition.
+- Escrow liabilities are `totalEscrow` (unsettled invoices) plus `totalClaimable` (credited, unclaimed). Invariant: `token.balanceOf(escrow) >= totalEscrow + totalClaimable`, with equality absent stray transfers. Stray transfers to the escrow are not claimable and are not swept.
+- Aggregation is per address: one address that is both a client (refund) and a freelancer (remainder) is paid the sum in one claim.
 
 ### 4.7 Authorization matrix
 
@@ -185,6 +202,7 @@ A prior advance is never clawed back from the freelancer.
 |---|---|
 | `deposit` / `mint` / `redeem` / `withdraw` | any LP (subject to full pause and available liquidity; unaffected by the advance-only pause) |
 | `fundAdvance` / `recordRepayment` / `finalizeLoss` | `vault.escrow()` only |
+| `claim(recipient)` (escrow) | anyone; always pays `recipient` |
 | `setEscrow` | vault `DEFAULT_ADMIN_ROLE`, once |
 | `pause()` / `pauseAdvances()` (vault) | vault `PAUSER_ROLE` or `OPERATOR_ROLE` |
 | `unpause()` / `unpauseAdvances()` (vault) | vault `OPERATOR_ROLE` only |
@@ -297,6 +315,8 @@ interface IDuelyVault /* is IERC4626 */ {
     function advancesEnabled() external view returns (bool);   // !paused && !advancesPaused
     function getAdvance(uint256 invoiceId) external view returns (Advance memory);
     function availableLiquidity() external view returns (uint256);   // == token.balanceOf(vault)
+    /// Most assets all LPs together can withdraw now: cash - ceil(P/4), 0 at/above the 80% cap (A5.5, D3).
+    function withdrawableLiquidity() external view returns (uint256);
     function outstandingPrincipal() external view returns (uint256);
     function totalRealizedLosses() external view returns (uint256);
     function totalFeesEarned() external view returns (uint256);
@@ -342,8 +362,9 @@ Unchanged signatures: `createInvoice`, `cancelInvoice`, `fundInvoice`, `approveA
 
 Behavior changes:
 - `approveAdvance`: status must be `Funded`; computes `advance`/`fee`; stores both on the invoice; sets `Advanced`; calls `vault.fundAdvance(...)` (the vault pays the freelancer directly). Reverts (bubbling the vault's custom error) if limits, liquidity or pause block it. No state is left half-written.
-- `_settleInvoice`: if an advance exists, escrow `forceApprove`s the vault for `advance + fee`, calls `vault.recordRepayment(invoiceId)` and the remainder goes to the freelancer; without an advance, the full amount goes to the freelancer. `totalEscrow -= amount` in the same transaction.
-- `resolveDispute(false)`: full refund to the client; if an advance exists, calls `vault.finalizeLoss(invoiceId)`.
+- `_settleInvoice`: if an advance exists, escrow `forceApprove`s the vault for `advance + fee` and calls `vault.recordRepayment(invoiceId)`; the remainder (or, without an advance, the full amount) is **credited** to the freelancer's claimable balance (§4.6b). `totalEscrow -= amount` in the same transaction.
+- `resolveDispute(false)`: the full amount is **credited** to the client's claimable balance; if an advance exists, calls `vault.finalizeLoss(invoiceId)` first. Neither moves tokens to a person.
+- `claim(recipient)` (permissionless, `nonReentrant`): pays `claimable[recipient]` to `recipient`; reverts `NothingToClaim(recipient)` if zero; views `claimable(address)` and `totalClaimable()`.
 - Reentrancy guard on all fund-moving functions; checks-effects-interactions ordering is kept.
 
 Events (new signatures; V2 is a separate contract so topics do not collide with V1):
@@ -353,7 +374,10 @@ event InvoiceCreated(uint256 indexed invoiceId, address indexed freelancer, addr
 event InvoiceFunded(uint256 indexed invoiceId, address indexed client, uint256 amount);
 event InvoiceCancelled(uint256 indexed invoiceId);
 event AdvancePaid(uint256 indexed invoiceId, address indexed freelancer, uint256 amount, uint256 fee, bytes32 evaluationHash);
-event InvoiceSettled(uint256 indexed invoiceId, uint256 vaultPrincipalRepaid, uint256 vaultFeePaid, uint256 freelancerPaid);
+event InvoiceSettled(uint256 indexed invoiceId, uint256 vaultPrincipalRepaid, uint256 vaultFeePaid, uint256 freelancerCredited);
+event ProceedsCredited(uint256 indexed invoiceId, address indexed recipient, uint256 amount);
+event ProceedsClaimed(address indexed recipient, address indexed caller, uint256 amount);
+// errors added: NothingToClaim(address recipient)
 event InvoiceDisputed(uint256 indexed invoiceId, address indexed client, uint256 advanceAlreadyPaid);
 event DisputeResolved(uint256 indexed invoiceId, bool releasedToFreelancer, uint256 vaultLoss);
 ```
@@ -364,8 +388,9 @@ event DisputeResolved(uint256 indexed invoiceId, bool releasedToFreelancer, uint
 |---|---|---|
 | LP deposit / redeem | none | `Deposit` / `Withdraw`, ERC-20 `Transfer` |
 | Advance | `AdvancePaid` | `AdvanceFunded` |
-| Approve / freelancer-wins | `InvoiceSettled` | `AdvanceRepaid` |
-| Client-wins dispute | `DisputeResolved(…, false, vaultLoss)`, `InvoiceCancelled` | `AdvanceLossFinalized` |
+| Approve / freelancer-wins | `InvoiceSettled`, `ProceedsCredited(freelancer)` | `AdvanceRepaid` |
+| Client-wins dispute | `DisputeResolved(…, false, vaultLoss)`, `ProceedsCredited(client)`, `InvoiceCancelled` | `AdvanceLossFinalized` |
+| Payee claims | `ProceedsClaimed(recipient, caller, amount)` | none |
 
 ### 5.4 Repayment mechanism
 
@@ -378,13 +403,16 @@ Pull, not push-and-trust: the vault itself calls `transferFrom(escrow, vault, pr
 3. **Per-advance one-shot:** `None → Open → {Repaid | Lost}`; terminal states are final; each invoice has at most one advance.
 4. **Conservation of value:** across funding → settlement, `Δvault NAV = +fee`; across funding → loss, `ΔNAV = −principal`; escrow outflows plus vault inflows equal the invoice amount.
 5. **Realized losses are monotonic** and equal `Σ loss` over `Lost` advances.
-6. **Share solvency:** `previewRedeem(totalSupply) <= totalAssets`, and a redeem never pays more than `balanceOf(vault)`.
+6. **Share solvency:** `previewRedeem(totalSupply) <= totalAssets`, and a redeem never pays more than `withdrawableLiquidity() <= balanceOf(vault)`.
 7. **Limits:** after any `fundAdvance`, §4.5 inequalities hold at funding-time NAV.
-8. **Escrow separation:** `totalEscrow == Σ amounts of Funded/Advanced/Disputed invoices` and escrow token balance `>=` `totalEscrow`; escrow funds never fund advances.
+8. **Escrow separation and solvency:** `totalEscrow == Σ amounts of Funded/Advanced/Disputed invoices`, `totalClaimable == Σ claimable[·]`, and `token.balanceOf(escrow) >= totalEscrow + totalClaimable` (equality absent stray transfers); escrow funds never fund advances; no standing allowance from escrow to vault between transactions.
 9. **Authorization:** the three escrow-only calls revert for every other caller, including the evaluator, operator and admin.
 10. **Pause:** full pause blocks deposit, mint, withdraw, redeem and `fundAdvance`; advance-only pause blocks only `fundAdvance`; neither ever blocks `recordRepayment` or `finalizeLoss`; only `OPERATOR_ROLE` can unpause; the evaluator can do none of this.
 11. **No fee on loss, no clawback of the freelancer.**
 12. **V1 regression:** every V1 test passes unchanged.
+13. **Withdrawal cap (D3):** after any successful redeem/withdraw, `P * 10000 <= 8000 * totalAssets`; if utilization was already above 80%, `maxRedeem == maxWithdraw == 0`; `withdrawableLiquidity == max(0, cash − ceil(P/4))`.
+14. **Pull payments (D4):** credits are created only at settlement/ruling, equal exactly the amounts of §4.1/§4.6, are paid only to their recipient, at most once, and a failed claim leaves the credit unchanged; total credited = total claimed + `totalClaimable`.
+15. **Settlement independence:** approval, release and refund rulings revert only if the vault repayment's token transfer fails; never because of a payee.
 
 ## 7. Artifacts and file locations (repository conventions)
 
@@ -423,10 +451,19 @@ Person B work (UI, indexing, backend; **B does not modify Solidity**) is unchang
 3. **Issuer control of RLUSD** (pause, clawback, upgrade) can freeze settlement or reduce vault balance (§4.9).
 4. **Donations benefit existing LPs** and loosen NAV-based limits (§4.2).
 5. **Pausing the vault fully** blocks LP exits (while still letting settlement and refunds complete).
+6. **Disputed advances (D1, operational runbook, no on-chain freeze):** a disputed advance is carried at par until the ruling, so LPs can exit at par while the dispute is open (bounded by §4.4's cap). Mitigation is operational only: the backend watches the escrow's `InvoiceDisputed` event for an invoice with `advanceAlreadyPaid > 0` and the **pauser** calls `vault.pause()` (or `pauseAdvances()` if only new advances should stop); the operator rules via `resolveDispute`, then unpauses. Resolution, repayment and loss recognition are never blocked by the pause. This cannot beat a withdrawal in the same block, and a pause also blocks deposits. There is **no automatic freeze and no impairment accounting** in V2.
+7. **Fee sniping (D2):** a depositor can join just before a repayment and leave right after, capturing most of that fee. Acknowledged MVP risk; no holding period or exit fee.
+8. **Admin roles (D5):** the testnet admin can grant itself any role on both contracts. The existing testnet role assignment stays; **a multisig/timelock admin and stronger controls (for example `AccessControlDefaultAdminRules`) are required before production**.
+9. **No invoice timeout (D6):** until a dispute/expiry policy is specified, an undisputed invoice can only be settled by its client.
+10. **Claims to a permanently blocked address stay stuck** (§4.6b); stray transfers to the escrow and vault are not recoverable.
 
 ### 9.2 Resolved by the final clarifications
 
 Redemptions while paused (full pause blocks them; advance-only pause does not), deposit cap (none), share decimals offset (6), donations (balance-based accounting, no sweep), demo liquidity (limits unchanged; size invoices accordingly), impairment (`I = 0`), stuck invoices (limitation, not implemented), directory ownership (Person A owns contracts, ABIs and manifests; Person B consumes).
+
+### 9.2b A5 security review
+
+Findings, severities and the decisions needed before A6 (dispute-time exit policy, fee sniping, post-withdrawal concentration, pull payments, admin hardening, stuck invoices) are in `docs/V2_SECURITY_REVIEW.md`. That document supersedes the informal risk notes in §9.1 where they differ.
 
 ### 9.3 Remaining ambiguities and contradictions (not decided here)
 

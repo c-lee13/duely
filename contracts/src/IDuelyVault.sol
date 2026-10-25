@@ -90,6 +90,9 @@ interface IDuelyVault is IERC4626 {
     function outstandingPrincipal() external view returns (uint256);
     function totalRealizedLosses() external view returns (uint256);
     function totalFeesEarned() external view returns (uint256);
+    /// @notice Most assets all LPs together can withdraw now: cash minus `ceil(P / 4)`, so utilization
+    /// stays <= 80% after the withdrawal. 0 at or above the cap. Basis of maxRedeem/maxWithdraw.
+    function withdrawableLiquidity() external view returns (uint256);
     /// @notice outstandingPrincipal * 10000 / totalAssets (0 when totalAssets is 0).
     function utilizationBps() external view returns (uint256);
     /// @notice Largest principal fundAdvance would accept now (0 while advances are disabled or

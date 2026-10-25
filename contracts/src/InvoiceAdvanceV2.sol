@@ -18,6 +18,12 @@ import {IInvoiceAdvanceV2} from "./IInvoiceAdvanceV2.sol";
 /// freelancer the remaining 70. On a client-win dispute the client is refunded all 1,000 and the
 /// vault finalizes the 900 principal as a loss (no fee). Without an advance, the freelancer gets
 /// the full amount and no fee exists.
+///
+/// Pull payments: the freelancer's remainder and the client's refund are CREDITED to a claimable
+/// balance (RLUSD stays reserved in this contract) and paid out by the permissionless `claim`. A
+/// payee that cannot receive tokens (issuer blacklist or pause) therefore never blocks settlement,
+/// the vault's repayment or the loss recognition, and its credit is never destroyed. Only the vault
+/// is paid directly. Liabilities: balance >= totalEscrow + totalClaimable.
 contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -33,6 +39,10 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
     uint256 public nextInvoiceId = 1;
     /// @notice Sum of client escrow liabilities for funded, unsettled invoices (base units).
     uint256 public totalEscrow;
+    /// @notice RLUSD credited to payees and not yet claimed (base units).
+    uint256 public totalClaimable;
+    /// @notice Per-payee credited balance (freelancer remainders and client refunds).
+    mapping(address => uint256) public claimable;
 
     mapping(uint256 => Invoice) private invoices;
 
@@ -161,9 +171,10 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
         emit InvoiceDisputed(invoiceId, msg.sender, inv.advanceAmount);
     }
 
-    /// @notice Binary ruling. `true`: normal settlement. `false`: the client is refunded the full
-    /// escrow and the vault finalizes any advance principal as a realized loss (no fee). The
-    /// freelancer keeps the advance already paid; it is never clawed back.
+    /// @notice Binary ruling. `true`: normal settlement. `false`: the client is credited the full
+    /// escrow (claimable) and the vault finalizes any advance principal as a realized loss (no fee).
+    /// The freelancer keeps the advance already paid; it is never clawed back. The ruling cannot be
+    /// blocked by the client's ability to receive tokens.
     function resolveDispute(uint256 invoiceId, bool releaseToFreelancer)
         external
         nonReentrant
@@ -184,10 +195,33 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
         totalEscrow -= amount;
 
         if (vaultLoss > 0) vault.finalizeLoss(invoiceId);
-        paymentToken.safeTransfer(inv.client, amount);
+        _credit(invoiceId, inv.client, amount);
 
         emit DisputeResolved(invoiceId, false, vaultLoss);
         emit InvoiceCancelled(invoiceId);
+    }
+
+    // ---------------------------------------------------------------------
+    // Claims (pull payments)
+    // ---------------------------------------------------------------------
+
+    /// @notice Permissionless. Pays `recipient` its entire claimable balance, to `recipient` and
+    /// nowhere else, so nobody can redirect funds. The credit is zeroed before the transfer; if the
+    /// token transfer fails (issuer pause, blacklist) the whole call reverts and the credit is intact.
+    function claim(address recipient) external nonReentrant returns (uint256 amount) {
+        amount = claimable[recipient];
+        if (amount == 0) revert NothingToClaim(recipient);
+
+        claimable[recipient] = 0;
+        totalClaimable -= amount;
+
+        uint256 balanceBefore = paymentToken.balanceOf(address(this));
+        paymentToken.safeTransfer(recipient, amount);
+        // forge-lint: disable-next-line(incorrect-strict-equality)
+        if (balanceBefore - paymentToken.balanceOf(address(this)) != amount) {
+            revert UnsupportedTokenBehavior();
+        }
+        emit ProceedsClaimed(recipient, msg.sender, amount);
     }
 
     // ---------------------------------------------------------------------
@@ -217,8 +251,9 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
 
     /// @dev Shared by approveCompletion and resolveDispute(release). With an advance, the vault is
     /// repaid principal + the stored fee (vault pulls exactly that, checked by balance delta on both
-    /// sides) and only the remainder reaches the freelancer; without one, the freelancer gets the
-    /// full amount. Everything is checked-effects-interactions; any failed transfer reverts all of it.
+    /// sides) and only the remainder is credited to the freelancer; without one, the freelancer is
+    /// credited the full amount. The only token movement is the vault repayment; any failure there
+    /// reverts all of it.
     function _settleInvoice(uint256 invoiceId, Invoice storage inv) private {
         uint256 amount = inv.amount;
         uint256 principal = inv.advanceAmount;
@@ -238,8 +273,16 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
                 revert UnsupportedTokenBehavior();
             }
         }
-        if (toFreelancer > 0) paymentToken.safeTransfer(inv.freelancer, toFreelancer);
         emit InvoiceSettled(invoiceId, principal, fee, toFreelancer);
+        if (toFreelancer > 0) _credit(invoiceId, inv.freelancer, toFreelancer);
+    }
+
+    /// @dev Moves `amount` of already-escrowed RLUSD from the invoice's escrow liability to the payee's
+    /// claimable balance. No tokens move; the reserve stays in this contract.
+    function _credit(uint256 invoiceId, address recipient, uint256 amount) private {
+        claimable[recipient] += amount;
+        totalClaimable += amount;
+        emit ProceedsCredited(invoiceId, recipient, amount);
     }
 
     function _load(uint256 invoiceId) private view returns (Invoice storage inv) {

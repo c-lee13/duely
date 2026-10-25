@@ -335,10 +335,14 @@ contract DuelyVaultTest is Test {
 
         assertEq(vault.availableLiquidity(), 500 * E18);
         assertEq(vault.totalAssets(), 2000 * E18, "principal still counted at par");
+        // D3: cash minus ceil(P / 4) = 500 - 375 keeps utilization at or below 80% after exiting.
+        assertEq(vault.withdrawableLiquidity(), 125 * E18);
 
         uint256 maxShares = vault.maxRedeem(lp1);
         assertLt(maxShares, s1, "cap is below the LP's full balance");
-        assertLe(vault.previewRedeem(maxShares), 500 * E18, "cap never exceeds cash");
+        assertLe(
+            vault.previewRedeem(maxShares), 125 * E18, "cap never exceeds the withdrawable amount"
+        );
         assertEq(vault.maxWithdraw(lp1), vault.previewRedeem(maxShares));
 
         vm.prank(lp1);
@@ -349,9 +353,11 @@ contract DuelyVaultTest is Test {
 
         vm.prank(lp1);
         uint256 out = vault.redeem(maxShares, lp1, lp1);
-        assertLe(out, 500 * E18);
-        assertGe(out, 500 * E18 - 2);
-        assertLe(rlusd.balanceOf(address(vault)), 2, "vault cash fully used");
+        assertLe(out, 125 * E18);
+        assertGe(out, 125 * E18 - 2);
+        // Utilization after the withdrawal is at (not above) the 80% cap.
+        assertLe(vault.outstandingPrincipal() * 10_000, 8000 * vault.totalAssets());
+        assertEq(vault.maxRedeem(lp2) <= vault.convertToShares(2), true, "nothing meaningful left");
     }
 
     function test_withdraw_aboveLiquidityReverts() public {

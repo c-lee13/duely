@@ -462,7 +462,9 @@ describe("mock and live modes are independent", () => {
   it("API mode is chosen only by NEXT_PUBLIC_DATA_MODE=api; the default is mock", () => {
     const src = fs.readFileSync("lib/frontend/data-mode.ts", "utf8")
     assert.match(src, /NEXT_PUBLIC_DATA_MODE === "api" \? "api" : "mock"/)
-    assert.match(fs.readFileSync("lib/frontend/create-repository.ts", "utf8"), /DATA_MODE === "api" \? new ApiDuelyRepository\(\) : new MockDuelyRepository\(\)/)
+    const repoSrc = fs.readFileSync("lib/frontend/create-repository.ts", "utf8")
+    assert.match(repoSrc, /DATA_MODE !== "api"\s*(?:\)\s*)?return new MockDuelyRepository\(\)/)
+    assert.match(repoSrc, /new ApiDuelyRepository\(/)
   })
 
   it("timeline building adds no on-chain events and labels fixtures", () => {

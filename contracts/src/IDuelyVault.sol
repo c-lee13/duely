@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 /// @notice Public interface of DuelyVault (docs/VAULT_IMPLEMENTATION_SPEC.md, A1.5 final).
-/// A2 ships the LP side (ERC-4626 deposits/redemptions, share pricing, pause scaffolding). The
-/// advance, repayment and loss functions are declared here but revert until A3/A4.
+/// A2: LP side (ERC-4626, share pricing, pause scaffolding). A3: fundAdvance. recordRepayment
+/// and finalizeLoss are declared here but revert until A4.
 /// Types, events and errors below are proposals until the compiled ABI is exported.
 interface IDuelyVault is IERC4626 {
     enum AdvanceStatus {
@@ -27,8 +27,14 @@ interface IDuelyVault is IERC4626 {
     }
 
     // ---- events (ERC-4626 Deposit/Withdraw and ERC-20 Transfer/Approval are inherited) ----
+    /// @param outstandingPrincipalAfter vault-wide outstanding principal after this advance.
     event AdvanceFunded(
-        uint256 indexed invoiceId, address indexed freelancer, uint256 principal, uint256 fee
+        uint256 indexed invoiceId,
+        address indexed freelancer,
+        uint256 invoiceAmount,
+        uint256 principal,
+        uint256 fee,
+        uint256 outstandingPrincipalAfter
     );
     event AdvanceRepaid(uint256 indexed invoiceId, uint256 principalRepaid, uint256 feeEarned);
     event AdvanceLossFinalized(uint256 indexed invoiceId, uint256 principalLoss);
@@ -45,17 +51,18 @@ interface IDuelyVault is IERC4626 {
     error UnsupportedTokenBehavior();
     error AdvancesAreDisabled();
     error AdvanceFlowNotImplemented();
-    // Reserved for A3/A4 (declared now so the ABI surface is stable):
     error InvalidAmount();
+    error InvalidFee(uint256 provided, uint256 expected);
     error AdvanceAlreadyExists(uint256 invoiceId);
     error AdvanceNotOpen(uint256 invoiceId, AdvanceStatus actual);
     error AdvanceExceedsInvoiceCap(uint256 principal, uint256 invoiceAmount);
     error ExceedsUtilizationLimit(uint256 outstandingAfter, uint256 maxOutstanding);
     error ExceedsInvoiceExposureLimit(uint256 principal, uint256 maxPrincipal);
     error InsufficientLiquidity(uint256 required, uint256 available);
+    // AdvanceNotOpen is reserved for A4 (repayment / loss).
     // Plus OZ ERC4626 (ERC4626ExceededMax*), Pausable and AccessControl errors.
 
-    // ---- escrow-only writes (revert with AdvanceFlowNotImplemented until A3/A4) ----
+    // ---- escrow-only writes (recordRepayment / finalizeLoss revert until A4) ----
     function fundAdvance(
         uint256 invoiceId,
         address freelancer,
@@ -87,9 +94,10 @@ interface IDuelyVault is IERC4626 {
     /// @notice outstandingPrincipal * 10000 / totalAssets (0 when totalAssets is 0).
     function utilizationBps() external view returns (uint256);
     /// @notice Largest principal fundAdvance would accept now (0 while advances are disabled or
-    /// no escrow is set). Informational only until A3/A4 enforce the limits.
+    /// no escrow is set). Computed from the same caps fundAdvance enforces.
     function maxAdvanceNow() external view returns (uint256);
     function MAX_ADVANCE_BPS() external view returns (uint256);
     function MAX_UTILIZATION_BPS() external view returns (uint256);
     function MAX_INVOICE_EXPOSURE_BPS() external view returns (uint256);
+    function FEE_BPS() external view returns (uint256);
 }

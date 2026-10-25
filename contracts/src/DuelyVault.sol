@@ -14,8 +14,8 @@ import {IDuelyVault} from "./IDuelyVault.sol";
 
 /// @title DuelyVault
 /// @notice Pooled RLUSD vault. LPs deposit the underlying asset and receive transferable
-/// `dvRLUSD` shares. A2 FOUNDATION: LP deposits/redemptions, share pricing and pause scaffolding
-/// only. The advance, repayment and loss functions revert until A3/A4.
+/// `dvRLUSD` shares. A2: LP deposits/redemptions, share pricing, pause scaffolding. A3: advance
+/// funding. `recordRepayment` and `finalizeLoss` still revert until A4.
 ///
 /// Accounting (docs/VAULT_IMPLEMENTATION_SPEC.md §4.2):
 ///   totalAssets = token.balanceOf(vault) + outstandingPrincipal          (impairment is 0)
@@ -34,11 +34,14 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
     uint256 public constant MAX_ADVANCE_BPS = 9_000;
     uint256 public constant MAX_UTILIZATION_BPS = 8_000;
     uint256 public constant MAX_INVOICE_EXPOSURE_BPS = 2_500;
+    /// @notice Financing fee, in bps of invoice value, that the escrow must quote at funding.
+    uint256 public constant FEE_BPS = 300;
 
     address public escrow;
     bool public advancesPaused;
 
-    // Advance ledger. Written only by the A3/A4 escrow-only functions; zero in A2.
+    // Advance ledger. Written only by the escrow-only functions (fundAdvance in A3;
+    // recordRepayment / finalizeLoss in A4).
     uint256 public outstandingPrincipal;
     uint256 public totalRealizedLosses;
     uint256 public totalFeesEarned;
@@ -145,8 +148,67 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
     // Advance flow: not implemented until A3/A4
     // ---------------------------------------------------------------------
 
-    function fundAdvance(uint256, address, uint256, uint256, uint256) external pure {
-        revert AdvanceFlowNotImplemented();
+    /// @notice Escrow-only. Pays `principal` from the vault's cash to `freelancer` and records
+    /// the advance as Open. The escrow is the trust anchor for the invoice terms (it is immutable
+    /// once set and is the only caller); the vault re-validates them against the finalized
+    /// limits so an escrow bug cannot exceed 90% of the invoice, the exposure cap, the
+    /// utilization cap, available cash, or advance the same invoice twice.
+    /// Funding moves value from cash to outstanding principal, so NAV and share price are
+    /// unchanged. All limits are measured against NAV before the advance.
+    function fundAdvance(
+        uint256 invoiceId,
+        address freelancer,
+        uint256 invoiceAmount,
+        uint256 principal,
+        uint256 fee
+    ) external nonReentrant {
+        address escrow_ = escrow;
+        if (escrow_ == address(0)) revert EscrowNotSet();
+        if (msg.sender != escrow_) revert NotEscrow();
+        _requireNotPaused();
+        if (advancesPaused) revert AdvancesAreDisabled();
+
+        // Invoice terms.
+        IERC20 token = IERC20(asset());
+        if (
+            freelancer == address(0) || freelancer == address(this) || freelancer == escrow_
+                || freelancer == address(token)
+        ) revert InvalidAddress();
+        if (invoiceAmount == 0 || principal == 0) revert InvalidAmount();
+        Advance storage adv = advances[invoiceId];
+        if (adv.status != AdvanceStatus.None) revert AdvanceAlreadyExists(invoiceId);
+        if (principal > Math.mulDiv(invoiceAmount, MAX_ADVANCE_BPS, BPS)) {
+            revert AdvanceExceedsInvoiceCap(principal, invoiceAmount);
+        }
+        uint256 expectedFee = Math.mulDiv(invoiceAmount, FEE_BPS, BPS);
+        if (fee != expectedFee) revert InvalidFee(fee, expectedFee);
+
+        // Liquidity and risk limits (NAV before the advance).
+        uint256 cash = availableLiquidity();
+        if (principal > cash) revert InsufficientLiquidity(principal, cash);
+        (, uint256 invoiceCap, uint256 headroom) = _riskCaps();
+        if (principal > invoiceCap) revert ExceedsInvoiceExposureLimit(principal, invoiceCap);
+        if (principal > headroom) {
+            revert ExceedsUtilizationLimit(
+                outstandingPrincipal + principal, outstandingPrincipal + headroom
+            );
+        }
+
+        // Effects.
+        adv.freelancer = freelancer;
+        adv.invoiceAmount = invoiceAmount;
+        adv.principal = principal;
+        adv.fee = fee;
+        adv.status = AdvanceStatus.Open;
+        uint256 outstandingAfter = outstandingPrincipal + principal;
+        outstandingPrincipal = outstandingAfter;
+
+        // Interaction: exactly `principal` must leave the vault.
+        token.safeTransfer(freelancer, principal);
+        // forge-lint: disable-next-line(incorrect-strict-equality)
+        if (cash - availableLiquidity() != principal) revert UnsupportedTokenBehavior();
+
+        emit AdvanceFunded(invoiceId, freelancer, invoiceAmount, principal, fee, outstandingAfter);
     }
 
     function recordRepayment(uint256) external pure {
@@ -219,19 +281,28 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
         return Math.mulDiv(outstandingPrincipal, BPS, nav);
     }
 
+    /// @notice The largest principal fundAdvance would accept right now, ignoring the per-invoice
+    /// 90% terms (which depend on the invoice). Shares `_riskCaps` with fundAdvance so the two
+    /// cannot drift apart.
     function maxAdvanceNow() external view returns (uint256) {
         if (!advancesEnabled() || escrow == address(0)) return 0;
-        uint256 nav = totalAssets();
-        uint256 maxOutstanding = Math.mulDiv(nav, MAX_UTILIZATION_BPS, BPS);
-        uint256 headroom =
-            outstandingPrincipal >= maxOutstanding ? 0 : maxOutstanding - outstandingPrincipal;
-        uint256 perInvoice = Math.mulDiv(nav, MAX_INVOICE_EXPOSURE_BPS, BPS);
-        return Math.min(availableLiquidity(), Math.min(headroom, perInvoice));
+        (, uint256 invoiceCap, uint256 headroom) = _riskCaps();
+        return Math.min(availableLiquidity(), Math.min(headroom, invoiceCap));
     }
 
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    /// @dev NAV, the per-invoice exposure cap and the remaining utilization headroom, all floored
+    /// so that `principal <= cap` is exactly `principal * 10000 <= NAV * bps`.
+    function _riskCaps() private view returns (uint256 nav, uint256 invoiceCap, uint256 headroom) {
+        nav = totalAssets();
+        invoiceCap = Math.mulDiv(nav, MAX_INVOICE_EXPOSURE_BPS, BPS);
+        uint256 maxOutstanding = Math.mulDiv(nav, MAX_UTILIZATION_BPS, BPS);
+        headroom =
+            outstandingPrincipal >= maxOutstanding ? 0 : maxOutstanding - outstandingPrincipal;
+    }
 
     function _checkPauserOrOperator() private view {
         if (!hasRole(PAUSER_ROLE, msg.sender)) _checkRole(OPERATOR_ROLE);

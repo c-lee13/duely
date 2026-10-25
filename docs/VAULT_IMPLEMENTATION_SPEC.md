@@ -164,6 +164,8 @@ totalAssets() = B + P - I          with I == 0 in V2
 
 `totalAssets()` is measured **before** the advance (the advance leaves NAV unchanged). The limits apply at funding time only; a later NAV drop can push utilization above 80% without anything breaking, it just blocks further advances. `utilizationBps() = P * 10000 / totalAssets()` (0 if NAV is 0). Rounding in all checks uses the multiplication-first form above (no division-before-multiplication).
 
+**A3 implementation notes.** `fundAdvance` checks, in order: escrow configured and caller is the escrow; full pause and advance-only pause; freelancer is not zero, the vault, the escrow or the token; `invoiceAmount` and `principal` nonzero; no existing advance for the invoice; `principal <= floor(invoiceAmount * 9000 / 10000)`; `fee == floor(invoiceAmount * FEE_BPS / 10000)` (the vault re-validates the fee the escrow quotes, so an escrow bug cannot mis-price a repayment); `principal <= cash`; the two NAV caps. The escrow is the trust anchor for `invoiceAmount` and `freelancer` (it is the only caller and cannot be changed once set); no V2 interface change is needed for the 90% check. Because `cash = NAV − P` exactly and utilization is capped below 100%, `principal <= cash` is always implied by the utilization cap, so `InsufficientLiquidity` is unreachable and kept only as defence in depth. `maxAdvanceNow()` is computed from the same caps as `fundAdvance` (it excludes the invoice-specific 90% term).
+
 **Consequence for the demo (flagged):** funding a 900 RLUSD advance requires `totalAssets >= 3,600` (25% exposure rule, which is stricter than the 80% utilization rule), and `availableLiquidity() >= 900`. The testnet E2E therefore needs LPs depositing at least 3,600 RLUSD in total before the first advance.
 
 ### 4.6 Dispute outcomes
@@ -232,8 +234,14 @@ interface IDuelyVault /* is IERC4626 */ {
     }
 
     // ---- events (vault-specific; ERC-4626 Deposit/Withdraw are inherited) ----
+    /// outstandingPrincipalAfter = vault-wide outstanding principal after this advance (A3).
     event AdvanceFunded(
-        uint256 indexed invoiceId, address indexed freelancer, uint256 principal, uint256 fee
+        uint256 indexed invoiceId,
+        address indexed freelancer,
+        uint256 invoiceAmount,
+        uint256 principal,
+        uint256 fee,
+        uint256 outstandingPrincipalAfter
     );
     event AdvanceRepaid(uint256 indexed invoiceId, uint256 principalRepaid, uint256 feeEarned);
     event AdvanceLossFinalized(uint256 indexed invoiceId, uint256 principalLoss);
@@ -253,7 +261,8 @@ interface IDuelyVault /* is IERC4626 */ {
     error AdvanceExceedsInvoiceCap(uint256 principal, uint256 invoiceAmount);
     error ExceedsUtilizationLimit(uint256 outstandingAfter, uint256 maxOutstanding);
     error ExceedsInvoiceExposureLimit(uint256 principal, uint256 maxPrincipal);
-    error InsufficientLiquidity(uint256 required, uint256 available);
+    error InsufficientLiquidity(uint256 required, uint256 available); // defence in depth; see §4.5
+    error InvalidFee(uint256 provided, uint256 expected);              // A3
     error AdvancesAreDisabled();       // advance-only pause set
     error EscrowMismatch();            // setEscrow sanity checks failed
     error UnsupportedTokenBehavior();
@@ -297,6 +306,7 @@ interface IDuelyVault /* is IERC4626 */ {
     function MAX_ADVANCE_BPS() external view returns (uint256);
     function MAX_UTILIZATION_BPS() external view returns (uint256);
     function MAX_INVOICE_EXPOSURE_BPS() external view returns (uint256);
+    function FEE_BPS() external view returns (uint256);                // 300, A3
 }
 ```
 

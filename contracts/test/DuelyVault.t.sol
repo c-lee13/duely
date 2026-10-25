@@ -608,7 +608,7 @@ contract DuelyVaultTest is Test {
         assertEq(vault.escrow(), address(0), "failed attempts do not spend the one-time right");
     }
 
-    function test_advanceFlow_revertsUntilA3_forEveryCaller() public {
+    function test_repaymentAndLoss_revertUntilA4_forEveryCaller() public {
         address esc = address(new DuelyVault(IERC20(address(rlusd)), admin, operator, pauser));
         vm.prank(admin);
         vault.setEscrow(esc);
@@ -617,8 +617,6 @@ contract DuelyVaultTest is Test {
         address[5] memory callers = [esc, admin, operator, lp1, address(this)];
         for (uint256 i; i < callers.length; i++) {
             vm.startPrank(callers[i]);
-            vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
-            vault.fundAdvance(1, lp2, 1000 * E18, 900 * E18, 30 * E18);
             vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);
             vault.recordRepayment(1);
             vm.expectRevert(IDuelyVault.AdvanceFlowNotImplemented.selector);

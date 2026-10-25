@@ -299,6 +299,19 @@ export function validateDescription(description: unknown): string | null {
  * One model call -> strict validation -> deterministic checks -> a labelled draft.
  * Errors from `generate` are reported as stage "generate" without echoing the provider's message.
  */
+/**
+ * A coarse, safe label for a failed model call, for server logs only: never the provider's message, which may quote the request.
+ * "timeout" is the SDK aborting at GEMINI_REQUEST_TIMEOUT_MS; "http_<status>" is an answer from Google (503 = overloaded/unavailable).
+ */
+export function generateErrorCategory(e: unknown): string {
+  const name = e instanceof Error ? e.name : ""
+  if (name === "AbortError" || name === "TimeoutError") return "timeout"
+  const status = (e as { status?: unknown } | null)?.status
+  if (typeof status === "number") return `http_${status}`
+  if (e instanceof TypeError) return "network"
+  return "unknown"
+}
+
 export async function draftRequirements(generate: GenerateFn, description: string): Promise<DraftResult> {
   const bad = validateDescription(description)
   if (bad) return failure("input", bad)
@@ -306,14 +319,14 @@ export async function draftRequirements(generate: GenerateFn, description: strin
   let raw: string
   try {
     raw = await generate(buildRequirementsPrompt(description))
-  } catch {
-    return failure("generate", "The drafting model couldn't be reached.")
+  } catch (e) {
+    return failure("generate", "The drafting model couldn't be reached.", `category: ${generateErrorCategory(e)}`)
   }
   let json: unknown
   try {
     json = JSON.parse(raw)
   } catch {
-    return failure("parse", "The response was not valid JSON.")
+    return failure("parse", "The response was not valid JSON.", `response length ${raw.length}${raw.trim() === "" ? " (empty)" : ""}`)
   }
   const parsed = draftResponseSchema.safeParse(json)
   if (!parsed.success) return failure("validation", ...parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`))

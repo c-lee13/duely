@@ -10,8 +10,8 @@
 import type {
   Address,
   Bytes32,
-  CriterionResult,
-  EvaluationResult,
+  CriterionResult as SharedCriterionResult,
+  EvaluationResult as SharedEvaluationResult,
   InvoiceId,
   InvoiceRecord,
   OnchainInvoiceStatus,
@@ -20,25 +20,15 @@ import type {
   TxAction,
 } from "@/lib/shared/types"
 
-<<<<<<< HEAD
-export type OnchainInvoiceStatus =
-  | "Created"
-  | "Funded"
-  | "Advanced"
-  | "Disputed"
-  | "Settled"
-export type SubmissionStatus = "NotSubmitted" | "Submitted" | "Evaluated"
-
-export interface InvoiceRecord {
-  invoiceId: InvoiceId
-  client: Address
-  freelancer: Address
-  amount: TokenAmount
-  advanceAmount: TokenAmount // actual amount advanced, 0 before advance
-  criteriaHash: Bytes32
-  onchainStatus: OnchainInvoiceStatus
-  submissionStatus: SubmissionStatus
-  description?: string
+export type {
+  Address,
+  Bytes32,
+  InvoiceId,
+  InvoiceRecord,
+  OnchainInvoiceStatus,
+  SubmissionStatus,
+  TokenAmount,
+  TxAction,
 }
 
 export type CriterionAssessmentValue = "verified" | "partial" | "unsupported"
@@ -51,10 +41,8 @@ export interface SourceReference {
   quote: string
 }
 
-export interface CriterionResult {
-  criterion: string
-  passed: boolean
-  reason: string
+/** The shared criterion result plus the optional detail classifying evaluators (Gemini) attach. */
+export interface CriterionResult extends SharedCriterionResult {
   /** Classifying evaluators (Gemini) only; absent for simulated and older evaluations. */
   assessment?: CriterionAssessmentValue
   weight?: number
@@ -64,26 +52,8 @@ export interface CriterionResult {
   evidence?: SourceReference[]
 }
 
-export interface EvaluationResult {
-  invoiceId: InvoiceId
-  submissionId: string
-  score: number // integer 0..100
-  passed: boolean
+export interface EvaluationResult extends Omit<SharedEvaluationResult, "criteriaResults"> {
   criteriaResults: CriterionResult[]
-  summary: string
-=======
-export type {
-  Address,
-  Bytes32,
-  CriterionResult,
-  EvaluationResult,
-  InvoiceId,
-  InvoiceRecord,
-  OnchainInvoiceStatus,
-  SubmissionStatus,
-  TokenAmount,
-  TxAction,
->>>>>>> origin/integration
 }
 
 // ---- UI-only extensions ----------------------------------------------------

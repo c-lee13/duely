@@ -47,13 +47,10 @@ export type EvidenceErrorCode =
   | "CHAIN_UNAVAILABLE"
   | "SUBMISSION_LIMIT"
   | "TOO_MANY_UPLOADS"
-<<<<<<< HEAD
   | "GITHUB_REJECTED"
   | "GITHUB_UNAVAILABLE"
   | "GITHUB_SUBMISSIONS_UNAVAILABLE"
-=======
   | "WRONG_DEPLOYMENT"
->>>>>>> origin/integration
 
 const STATUS: Record<EvidenceErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -73,13 +70,10 @@ const STATUS: Record<EvidenceErrorCode, number> = {
   CHAIN_UNAVAILABLE: 503,
   SUBMISSION_LIMIT: 409,
   TOO_MANY_UPLOADS: 429,
-<<<<<<< HEAD
   GITHUB_REJECTED: 422,
   GITHUB_UNAVAILABLE: 503,
   GITHUB_SUBMISSIONS_UNAVAILABLE: 503,
-=======
   WRONG_DEPLOYMENT: 409,
->>>>>>> origin/integration
 }
 
 export class EvidenceError extends Error {

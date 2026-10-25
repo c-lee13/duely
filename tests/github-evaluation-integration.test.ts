@@ -4,7 +4,7 @@ import fs from "node:fs"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { Clock, FakeObjectStore } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator , TEST_SCOPE } from "./helpers/backend"
 import { handleAdvance, handleEvaluate } from "@/lib/backend/handlers"
 import type { BackendDeps } from "@/lib/backend/ports"
 import { createGeminiEvaluator, createGeminiEvaluatorFromEnv, type GeminiLikeClient } from "@/lib/ai/evaluation-service"
@@ -172,6 +172,7 @@ beforeEach(async () => {
   const chain = new FakeChainAdapter()
   chain.available = false
   deps = {
+    scope: TEST_SCOPE,
     db: createPgBackendDb(db),
     objects: store,
     chain,
@@ -595,7 +596,7 @@ describe("evaluations never trigger payments or touch advance and dispute rules"
     assert.equal(await count("advance_requests"), 0)
     assert.equal(await count("transactions"), 0)
     assert.equal(signer.calls, 0)
-    assert.deepEqual(chain.calls, { creation: 0, state: 0, reserve: 0 })
+    assert.deepEqual(chain.calls, { creation: 0, state: 0, reserve: 0, tx: 0, found: 0 })
   })
 
   it("an advance still needs its own explicit request, and is refused with no chain or signer", async () => {

@@ -4,7 +4,7 @@ import fs from "node:fs"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { Clock, FakeChain, FakeObjectStore, createPgEvidenceDb } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, ScriptedEvaluator } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, ScriptedEvaluator , TEST_SCOPE } from "./helpers/backend"
 import { handleAdvance, handleEvaluate, handleGetInvoice, handleListInvoices } from "@/lib/backend/handlers"
 import { handleSubmissionPost } from "@/lib/evidence/submissions-http"
 import type { EvidenceDeps } from "@/lib/evidence/service"
@@ -176,8 +176,9 @@ beforeEach(async () => {
   evaluator = new ScriptedEvaluator()
   const chain = new FakeChainAdapter()
   chain.available = false
-  deps = { db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator }
+  deps = { scope: TEST_SCOPE, db: createPgBackendDb(db), objects: store, chain, signer: new FakeSigner(), evaluator }
   evDeps = {
+    scope: TEST_SCOPE,
     db: createPgEvidenceDb(db),
     objects: store,
     chain: new FakeChain(),

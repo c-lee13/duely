@@ -85,10 +85,6 @@ function mapCode(code: string, status: number): DomainErrorCode {
     case "EVIDENCE_NOT_EVALUABLE":
     case "GITHUB_REJECTED": // repository not found / not public / commit missing: the freelancer can fix the input
       return "INVALID_INPUT"
-<<<<<<< HEAD
-    case "GITHUB_UNAVAILABLE": // GitHub rate limit or outage
-    case "GITHUB_SUBMISSIONS_UNAVAILABLE": // not enabled / database update pending
-=======
     case "WRONG_DEPLOYMENT":
     case "INTEGRITY_MISMATCH":
     case "CHAIN_TX_INVALID":
@@ -96,7 +92,8 @@ function mapCode(code: string, status: number): DomainErrorCode {
       return "INVALID_STATUS"
     case "INVOICE_CANCELLED":
       return "INVALID_STATUS"
->>>>>>> origin/integration
+    case "GITHUB_UNAVAILABLE": // GitHub rate limit or outage
+    case "GITHUB_SUBMISSIONS_UNAVAILABLE": // not enabled / database update pending
     case "INTEGRATION_UNAVAILABLE":
     case "EVALUATOR_UNAVAILABLE":
     case "CHAIN_UNAVAILABLE":

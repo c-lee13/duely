@@ -4,7 +4,7 @@ import fs from "node:fs"
 import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { Clock, FakeChain, FakeObjectStore, createPgEvidenceDb } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http, ScriptedEvaluator , TEST_SCOPE } from "./helpers/backend"
 import { handleSubmissionPost } from "@/lib/evidence/submissions-http"
 import { EvidenceError, mapSubmissionInsertError, type EvidenceDeps } from "@/lib/evidence/service"
 import { handleAdvance, handleEvaluate, handleGetInvoice } from "@/lib/backend/handlers"
@@ -124,6 +124,7 @@ beforeEach(async () => {
   codePrompts = 0
   textPrompts = 0
   evDeps = {
+    scope: TEST_SCOPE,
     db: createPgEvidenceDb(db),
     objects: store,
     chain: new FakeChain(),
@@ -136,6 +137,7 @@ beforeEach(async () => {
   const chain = new FakeChainAdapter()
   chain.available = false
   deps = {
+    scope: TEST_SCOPE,
     db: createPgBackendDb(db),
     objects: store,
     chain,
@@ -597,7 +599,7 @@ describe("payments and advance restrictions are untouched", () => {
     assert.equal(await count("advance_requests"), 0)
     assert.equal(await count("transactions"), 0)
     assert.equal((deps.signer as FakeSigner).calls, 0)
-    assert.deepEqual((deps.chain as FakeChainAdapter).calls, { creation: 0, state: 0, reserve: 0 })
+    assert.deepEqual((deps.chain as FakeChainAdapter).calls, { creation: 0, state: 0, reserve: 0, tx: 0, found: 0 })
     const adv = await http(handleAdvance, ctx(U.freelancer, deps), { body: { invoiceId: INV } })
     assert.equal(adv.status, 503, "an advance still needs its own request, a chain and a signer")
     assert.equal(await count("advance_requests"), 0)

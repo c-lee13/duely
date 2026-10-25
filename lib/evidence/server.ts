@@ -1,13 +1,10 @@
 import "server-only"
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Address } from "@/lib/frontend/domain"
-<<<<<<< HEAD
 import { validateGithubSubmission } from "@/lib/ai/github-submission"
-=======
 import { activeDeploymentScope } from "@/lib/backend/scope"
 import { createChainAdapter, createChainFundingVerifier } from "@/lib/backend/chain-adapter"
 import type { DeploymentScope } from "@/lib/shared/deployment-scope"
->>>>>>> origin/integration
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { EVIDENCE_BUCKET } from "@/lib/supabase/env"
@@ -191,17 +188,12 @@ export function getEvidenceDeps(): EvidenceDeps {
   return {
     db: createSupabaseEvidenceDb(admin),
     objects: createSupabaseObjectStore(admin),
-<<<<<<< HEAD
-    chain: getChainVerifier(),
-    requireChainVerification: process.env.EVIDENCE_REQUIRE_CHAIN_VERIFICATION === "true",
-    github: githubValidator(),
-=======
     scope,
     chain: getChainVerifier(scope),
     // With a real chain reader, funding must be PROVEN on-chain: the cached database status is no longer an acceptable
     // fallback. Only an explicit EVIDENCE_REQUIRE_CHAIN_VERIFICATION=false (dev fixtures that were never on-chain) turns it off.
     requireChainVerification: process.env.EVIDENCE_REQUIRE_CHAIN_VERIFICATION !== "false",
->>>>>>> origin/integration
+    github: githubValidator(),
   }
 }
 

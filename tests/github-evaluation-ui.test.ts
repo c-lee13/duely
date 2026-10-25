@@ -5,7 +5,7 @@ import type { PGlite } from "@electric-sql/pglite"
 import { createDb } from "./helpers/db"
 import { startRenderer } from "./helpers/render"
 import { Clock, FakeChain, FakeObjectStore, createPgEvidenceDb } from "./helpers/evidence"
-import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http } from "./helpers/backend"
+import { ctx, createPgBackendDb, FakeChainAdapter, FakeSigner, http , TEST_SCOPE } from "./helpers/backend"
 import { handleEvaluate, handleGetInvoice } from "@/lib/backend/handlers"
 import { handleSubmissionPost } from "@/lib/evidence/submissions-http"
 import type { EvidenceDeps } from "@/lib/evidence/service"
@@ -463,10 +463,11 @@ beforeEach(async () => {
   store = new FakeObjectStore(new Clock())
   gh = freshGh()
   codeReply = () => ({ assessments: [crow("c1", "verified", C1), crow("c2", "verified", C2), crow("c3", "verified", C3)] })
-  evDeps = { db: createPgEvidenceDb(db), objects: store, chain: new FakeChain(), requireChainVerification: false, github: (u, s) => validateGithubSubmission(u, s, { fetch: ghFetch }) }
+  evDeps = { scope: TEST_SCOPE, db: createPgEvidenceDb(db), objects: store, chain: new FakeChain(), requireChainVerification: false, github: (u, s) => validateGithubSubmission(u, s, { fetch: ghFetch }) }
   const chain = new FakeChainAdapter()
   chain.available = false
   deps = {
+    scope: TEST_SCOPE,
     db: createPgBackendDb(db),
     objects: store,
     chain,

@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useRepoQuery, useRepository } from "@/hooks/use-duely"
-import { errorMessage } from "@/lib/frontend/errors"
+import { signInErrorMessage } from "@/lib/frontend/errors"
 import { ErrorState, PageSkeleton } from "./primitives"
 
 /**
@@ -29,7 +29,7 @@ export function LiveAuthGate({ children }: { children: React.ReactNode }) {
     try {
       await repo.live?.signIn()
     } catch (e) {
-      setError(errorMessage(e))
+      setError(signInErrorMessage(e, typeof window === "undefined" ? undefined : window.location.origin))
     } finally {
       setPending(false)
     }

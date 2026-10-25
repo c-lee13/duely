@@ -1,6 +1,5 @@
 "use client"
 
-import * as React from "react"
 import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Coins, FlaskConical, Gauge, Layers, TrendingDown, Vault, Wallet } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -42,6 +41,9 @@ const RISKS = [
   "Your principal and any returns are not guaranteed. You can lose some or all of what you deposit.",
   "If a dispute is decided for the client, the advance is not recovered and the loss is shared by everyone holding shares, through a lower share price.",
   "Withdrawals depend on available liquidity. While advances are outstanding, you may only be able to withdraw part of your balance, or have to wait.",
+  "Open advances are valued at face value until they are repaid or written off, so the share price can overstate what the vault could realize while a dispute is unresolved. Someone who withdraws before a loss is recorded can exit at a price that does not yet reflect it.",
+  "There is no deadline for a client to approve or dispute an invoice. If a client doesn't respond, the advance can stay outstanding indefinitely and that liquidity stays unavailable.",
+  "The vault can be paused, which blocks deposits and withdrawals until it is unpaused.",
   `${VAULT_ASSET} is controlled by its issuer, who can pause transfers or claw back tokens.`,
   "The V2 contracts are not deployed and have not been audited. This page is a design preview.",
 ] as const

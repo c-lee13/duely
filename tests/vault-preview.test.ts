@@ -51,7 +51,10 @@ describe("Vault preview page", () => {
     assert.match(html, /not guaranteed/)
     assert.match(html, /Withdrawals depend on available liquidity/)
     assert.match(html, /lose some or all/)
-    assert.equal((html.match(/<li>/g) ?? []).length, 5)
+    assert.equal((html.match(/<li>/g) ?? []).length, 8)
+    assert.match(html, /face value/)
+    assert.match(html, /no deadline for a client/)
+    assert.match(html, /can be paused/)
   })
 
   it("makes no promises of yield, safety or live status", () => {

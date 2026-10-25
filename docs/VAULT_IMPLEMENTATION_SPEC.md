@@ -396,7 +396,9 @@ event DisputeResolved(uint256 indexed invoiceId, bool releasedToFreelancer, uint
 
 Pull, not push-and-trust: the vault itself calls `transferFrom(escrow, vault, principal + fee)` using the amounts it stored at funding, and reverts unless its balance rises by exactly that amount. The escrow cannot over- or under-report, and a repayment cannot be credited without real tokens arriving. The check is a balance delta taken around the pull (§4.2), so donations cannot mask a short or missing repayment. Approved invoices (and freelancer-wins disputes) repay principal plus fee; client-win disputes call `finalizeLoss` instead, with no token movement into the vault. This supersedes the README-era `recordRepayment(invoiceId, amount)` signature.
 
-## 6. Invariants (to be tested in A4)
+## 6. Invariants (tested statefully in A6)
+
+All of these are asserted after every call of randomized sequences (`test/invariant/V2Invariants.t.sol`, with an independent ghost model) and individually mutation-checked; see `docs/V2_SECURITY_REVIEW.md` §7. Items 13-15 are covered by the same suites.
 
 1. **NAV and conservation:** `totalAssets == token.balanceOf(vault) + P - I` with `I == 0`, `P == Σ principal of Open advances`, and no value counted in both terms. Direct donations raise `totalAssets` by exactly the donated amount and change nothing else (no advance record, fee or loss counter).
 2. **Repayment by balance delta:** `recordRepayment` succeeds only if the vault balance rises by exactly the stored `principal + fee`; a donation never satisfies or spoofs it, and amounts are never caller-supplied.
@@ -456,6 +458,8 @@ Person B work (UI, indexing, backend; **B does not modify Solidity**) is unchang
 8. **Admin roles (D5):** the testnet admin can grant itself any role on both contracts. The existing testnet role assignment stays; **a multisig/timelock admin and stronger controls (for example `AccessControlDefaultAdminRules`) are required before production**.
 9. **No invoice timeout (D6):** until a dispute/expiry policy is specified, an undisputed invoice can only be settled by its client.
 10. **Claims to a permanently blocked address stay stuck** (§4.6b); stray transfers to the escrow and vault are not recoverable.
+11. **Donations into a near-empty vault** are mostly absorbed by the ERC-4626 virtual position (S-16): unowned NAV is `NAV * 1e6 / (supply + 1e6)`. Dust with a healthy supply. Open decision D7 (dead-share seeding).
+12. **Share supply inflates after a near-total wipe-out** (S-17): the next deposit mints `assets * (supply + 1e6) / (NAV + 1)` shares, so repeated total wipe-outs can exhaust 256 bits and block deposits. Funds and redemptions are unaffected.
 
 ### 9.2 Resolved by the final clarifications
 

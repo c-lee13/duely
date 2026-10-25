@@ -33,6 +33,8 @@ Severity is for the MVP as designed (testnet, RLUSD, operator-run disputes). "Op
 | S-13 | Info | **Reentrancy: no vulnerability.** ERC-777-style hooks from every position (LP on deposit/redeem/withdraw/mint, freelancer on advance and settlement, client on funding and refund) cannot re-enter any state-changing function, and mid-callback views of NAV/price are consistent. Applies to hook-capable tokens; RLUSD is a plain ERC-20. | Verified by test |
 | S-14 | Info | Fee-on-transfer: rejected at deposit, invoice funding and repayment. A token that turns fee-on-transfer *after* funding (RLUSD is upgradeable) would stick settlement, same class as S-07. | Documented |
 | S-15 | Info | ERC-4626: with offset 6 the donation/inflation attack loses money for the attacker, many tiny cycles never profit (fuzz), `withdraw` rounds against the user, a 1-wei deposit into a loss-damaged vault stays 1 wei. | Verified by test |
+| S-16 | Low | **Donations into a near-empty vault are mostly unowned.** ERC-4626 virtual shares hold `1e6 / (supply + 1e6)` of NAV, so a donation made while (almost) no shares exist is absorbed by that virtual position and cannot be redeemed by any LP; the next depositor gets fair value only for their own money. With a healthy supply this is dust. It conflicts with the *spirit* of A1.5 decision 4 ("do not silently strand donations"), but only when every LP has exited, and the donor loses their own tokens. Found by A6 fuzzing. | **Open, decision D7** |
+| S-17 | Low (liveness) | **Share supply inflates after a total wipe-out.** When NAV reaches ~0 with shares outstanding, the next deposit mints `assets * (supply + 1e6) / (NAV + 1)` shares, multiplying the supply by ~the deposit size in wei. A few wipe-outs with recoveries exhaust 256 bits and new deposits revert; funds are never lost and redemptions still work. A single wipe-out is fine (tested). Found by A6 fuzzing. | **Accepted limitation** (needs a total loss of the whole vault, repeatedly) |
 
 ### Vulnerabilities fixed in A5
 
@@ -57,6 +59,7 @@ New advances are blocked by either pause. LP deposit/mint/withdraw/redeem are bl
 | **D4** | Settlement depending on payee transfers | **Implemented.** Remainders and refunds are credited and reserved in the escrow; permissionless `claim(recipient)` pays only the recipient; failed claims keep the credit. |
 | **D5** | Admin power | **Testnet roles unchanged.** A multisig/timelock admin and stronger controls are required before production. |
 | **D6** | Stuck invoices | **No timeout** until a dispute/expiry policy is specified. |
+| **D7** (A6, open) | Donations into an empty vault (S-16) | Not decided. Recommended: the deployer seeds the vault with a small deposit whose shares are sent to a dead address (for example 1 RLUSD), so supply is never near zero and the unowned fraction is ~1e-18. Costs the deployer that deposit; does not address S-17. |
 
 ### 4.1 D1 runbook: operator pause for disputed advances
 
@@ -70,7 +73,7 @@ New advances are blocked by either pause. LP deposit/mint/withdraw/redeem are bl
 
 **High:** S-04 admin self-grant (D5); S-05 no timeout / capital lock (D6); S-06 operator discretion.
 **Medium:** S-07 issuer pause/blacklist of the vault or escrow (residual after D4); S-01 fee sniping (D2); S-02 informed exit (D1); S-08 clawback; S-11 evaluator griefing; S-12 pause DoS.
-**Low:** S-03 per-invoice concentration after exits (residual after D3); S-09 `setEscrow` authentication; S-10 dust invoices.
+**Low:** S-03 per-invoice concentration after exits (residual after D3); S-09 `setEscrow` authentication; S-10 dust invoices; S-16 donations into an empty vault; S-17 supply inflation after repeated wipe-outs.
 **Info:** S-13 to S-15 (verified safe).
 
 Also still **not** covered: the full invariant suite and extended fuzzing (A6), the deploy script and ABI handoff, and an external audit.
@@ -93,3 +96,85 @@ Also still **not** covered: the full invariant suite and extended fuzzing (A6), 
 - `test/InvoiceAdvanceV2Claims.t.sol` (14 tests, 1 fuzz): credits and reserved balance at every step, permissionless claim paying only the recipient, double/unknown claims, aggregation across invoices and roles, issuer pause keeping credits, vault pause independence, stray tokens never claimable, and a fuzz that claims equal credits exactly.
 - Existing tests updated for the intentional behavior changes (settlement and refund now credit; exits capped): `InvoiceAdvanceV2.t.sol`, `DuelyVault.t.sol`, `DuelyV2Security.t.sol`, `DuelyV2Reentrancy.t.sol` (reentrancy now exercised through `claim`, including a double-claim attempt).
 - Mutation checks: restoring `withdrawable = cash` fails 16 tests; letting `claim` pay the caller fails 20.
+
+## 7. A6: stateful and fuzz verification
+
+**Result:** no defect was found in the contract logic. The work found and fixed several weaknesses in the *test suite itself* (below), two low-severity economic edge cases (S-16, S-17), and one redundant guard. Nothing in the financial model changed.
+
+### 7.1 New test files
+
+| File | Tests | What it is |
+|---|---:|---|
+| `test/invariant/V2Handler.sol` | n/a | Stateful handler with an independent ghost model. 21 randomized actions: LP deposit/redeem/withdraw/transfer/round-trip, invoice create/cancel/fund/advance/boundary-advance/approve, dispute and both rulings, claims, donations, issuer pause/blacklist/clawback, pause operations, hostile callers, duplicate attempts. Every action predicts its own outcome from the model and records a *violation* instead of reverting, so the suite runs under `fail_on_revert`. |
+| `test/invariant/V2Invariants.t.sol` | 3 (26 invariant checks + 1 scripted) | `V2InvariantsTest` and `V2InvariantsEscrowClawbackTest` (13 invariants each; the second also lets the issuer claw back from the escrow) and `V2HandlerReachabilityTest` (a scripted run proving every outcome is reachable, so the suite cannot be vacuous). Foundry counts each invariant contract as one test in its totals. |
+| `test/DuelyV2Fuzz.t.sol` | 11 | Targeted fuzz: rounding boundaries (previews equal execution after arbitrary histories), round trips, conversions, four LPs with sequential profits/losses/donations/exits, proportional sharing, donations, issuer clawback with open advances, failed token transfers (9 operations x 2 failure styles), pause guards at zero amounts, and two `KNOWN` tests. |
+| `test/mocks/ChaosToken.sol` | n/a | RLUSD-shaped token with issuer pause, blacklist and clawback. |
+| `test/DuelyV2Security.t.sol` | 32 (was 26) | Six new `KNOWN` tests; one tightened (see 7.4). |
+
+Suite total: **276 tests, 20 suites, all passing** at default settings.
+
+### 7.2 Invariants (asserted after every call of every random sequence)
+
+| # | Invariant | Where |
+|---|---|---|
+| 1 | Every action's outcome matches the model: authorization, pause behavior, expected reverts and successes, exact deltas, rounding direction, one-shot (duplicate) protection | `modelAgreesWithTheContracts` |
+| 2 | NAV = actual RLUSD cash + outstanding principal; `availableLiquidity` = token balance | `navIsCashPlusPrincipal` |
+| 3 | Outstanding principal = sum of open advances = ghost model | `principalEqualsSumOfOpenAdvances` |
+| 4 | Fees and losses recognized exactly once; one state per funded advance; terminal states carry exactly the right fields | `feesAndLossesRecognizedExactlyOnce` |
+| 5 | Escrow and vault ledgers match the ghost state machine for every invoice | `ledgersMatchTheGhostStateMachine` |
+| 6 | Utilization <= 80% in every reachable state unless the issuer clawed back from the vault; every successful withdrawal/advance also checked in the handler | `utilizationWithinCapUnlessClawedBack` |
+| 7 | Above the cap: nothing can be withdrawn or advanced | `aboveTheCapNothingLeavesAndNothingIsAdvanced` |
+| 8 | Escrow balance >= totalEscrow + totalClaimable (exempt only after an issuer clawback from the escrow); totalEscrow = funded unsettled invoices; no standing allowance | `escrowSolvency` |
+| 9 | Credits = claims + outstanding claimable, per actor and in total | `creditsEqualClaimsPlusOutstanding` |
+| 10 | ERC-4626: conversions and previews round against the user, limits <= the cap <= cash, no holder worth more than NAV, share solvency | `erc4626RoundingAndLimits` |
+| 11 | Shares are fully accounted for by the holders | `shareSupplyEqualsHolderBalances` |
+| 12 | RLUSD conserved across every actor and both contracts: balances sum to supply = minted - clawed back | `conservationOfRLUSD` |
+| 13 | Pause flags equal the model; nobody gained a role | `pauseStateAndRolesMatchTheModel` |
+
+"Risk-limit changes where authorized": the limits are compile-time constants and no setter exists, so there is nothing to change; the handler attacks every role-gated function and `setEscrow` instead.
+
+### 7.3 Mutation testing (does the suite fail when the contracts are wrong?)
+
+23 targeted mutations of `DuelyVault.sol` and `InvoiceAdvanceV2.sol`, each run against the invariant suite with a baseline check first (a campaign aborts if the unmutated suite fails). **22 are killed by the invariant suite; the 23rd (M19) is killed by a targeted test.** Killed: skipping the utilization cap; repayment not lowering principal or not counting the fee; loss not counted; uncapped withdrawals; NAV ignoring principal; `maxRedeem` ignoring pause; duplicate advance allowed; pause open to anyone; pauser able to unpause; `fundAdvance` open to any caller; claim not zeroing the credit; credits missing from `totalClaimable` or one wei too large; `approveAdvance` not evaluator-gated; refund skipping loss finalization; funding not booking escrow; anyone able to approve; skipped Open/status checks on repayment, approval, ruling and funding. M19 (`withdraw` without the pause modifier) is functionally redundant for any non-zero amount, because `maxWithdraw` is already 0 while paused; only a zero-amount call differs, and `test_fullPause_blocksEveryEntryPoint_evenWithZeroAmounts` kills it.
+
+**Test-suite weaknesses found and fixed during A6** (none was a contract defect):
+- Three mutations first *survived* (skipping the utilization cap, duplicate advances, unauthorized `fundAdvance`). Cause: vault too large for the limits to be reachable, and probes using terms the vault would refuse anyway, so the guard under test never decided the outcome. Fixed with a smaller vault, a boundary-targeting action, and probes with otherwise-valid terms.
+- A handler change briefly made the *baseline* revert under `fail_on_revert`, which made a whole mutation batch look "killed" for the wrong reason. Fixed, and the runner now aborts if the baseline fails.
+- `test_KNOWN_stuckInvoice_hasNoTimeout` used a bare `expectRevert()` and passed for the wrong reason for three of its four callers (they lacked the operator role rather than the invoice being undisputed). Now asserts the exact errors.
+- Test-side arithmetic overflow on astronomically large share counts (the S-17 effect) replaced with exact 512-bit comparisons.
+
+### 7.4 Audit of the `test_KNOWN_*` tests
+
+Each `KNOWN` test asserts that a **risk exists**; passing is never a security property, and a future mitigation makes it fail on purpose.
+
+| Test | Documents | Asserts | Review |
+|---|---|---|---|
+| `jitDepositCapturesTheFee` | S-01 | sniper takes >29 of 30 fee, honest LPs gain <1 | Documents the exploit. OK |
+| `informedLpExitsBeforeDisputedLossIsRecognized` | S-02 | exit at par up to the cap; remaining LP loses >100 more than fair | OK |
+| `adminCanSelfGrantEveryRole` | S-04 | self-grant succeeds and the roles work | OK |
+| `stuckInvoice_hasNoTimeout` | S-05 | after 5 years only the client can settle; principal still open | **Was weak** (passed for wrong reasons); now exact errors |
+| `perInvoiceConcentrationCanExceed25PercentAfterExits` (new) | S-03 residual | one advance >25% of NAV after exits | Previously buried inside a guarantee test; split out |
+| `issuerPauseBlocksSettlementOfAdvancedInvoices` (new) | S-07 residual | advanced settlement reverts under an issuer pause; no-advance settlement does not | New |
+| `clawbackFromEscrowCanLeaveACreditUnpayable` (new) | S-08 | escrow insolvent against credits; record survives | New |
+| `depositorDuringADisputeInheritsPartOfTheLoss` (new) | S-02 mirror | late depositor absorbs part of the loss | New |
+| `pauseCanFreezeExitsIndefinitely` (new) | S-12 | pause lasts 5 years; pauser cannot lift it | New |
+| `operatorRulingIsUnconstrainedOnChain` (new) | S-06 | operator can rule either way on the same kind of invoice | New |
+| `donationIntoAnEmptyVaultIsMostlyAbsorbedByTheVirtualPosition` (new) | S-16 | donation unredeemable | New |
+| `repeatedTotalWipeOutsEventuallyBlockNewDeposits` (new) | S-17 | deposits eventually revert | New |
+
+Non-`KNOWN` tests that could be misread as guarantees now say so in their NatSpec: the pause-on-dispute test is "NOT a guarantee" (favorable case only), the self-dealing test is "CONDITIONAL" (honest operator assumed), the utilization-cap test states it says nothing about per-invoice concentration.
+
+### 7.5 Running it
+
+> **Status: the `deep` profile run was cancelled before it completed (A6 was stopped to prioritize the hackathon MVP), so there is NO result at the 5,000-fuzz / 400x200-invariant level.** Everything reported here was verified at the default settings (128 runs x depth 100 for the invariants, 256 for fuzz). The profile exists in `foundry.toml` and is unused unless invoked.
+
+```
+cd contracts
+forge fmt --check && forge build && forge test                       # default: 128 runs x depth 100
+FOUNDRY_PROFILE=deep forge test                                      # 5,000 fuzz runs; 400 invariant runs x depth 200
+FOUNDRY_PROFILE=deep forge test --match-path test/invariant/V2Invariants.t.sol -vv   # also prints the call mix
+```
+
+### 7.6 Remaining risks before testnet deployment
+
+Unchanged from §5 plus S-16/S-17, and these deployment-time items that no test here covers: the deploy script and its verification (RLUSD address/symbol/decimals, distinct roles, escrow bytecode, one-time `setEscrow`), admin/operator/pauser/evaluator key custody (S-04, D5), the off-chain evaluator and monitoring runbook (D1), RLUSD's real issuer behavior on XRPL EVM testnet (pause, blacklist, clawback and upgrade were only modeled), testnet RLUSD liquidity for the 25% exposure rule, and an independent audit. The invariant suite exercises a model of RLUSD, not the live token.

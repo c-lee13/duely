@@ -22,3 +22,13 @@ fail_on_revert = true
 line_length = 100
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+# `FOUNDRY_PROFILE=deep forge test` runs the stateful and fuzz suites much harder (A6). Same settings as
+# the default profile otherwise; only run counts and sequence depth change.
+[profile.deep.fuzz]
+runs = 5000
+
+[profile.deep.invariant]
+runs = 400
+depth = 200
+fail_on_revert = true

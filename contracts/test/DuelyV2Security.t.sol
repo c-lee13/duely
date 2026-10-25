@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {DuelyVault} from "../src/DuelyVault.sol";
 import {IDuelyVault} from "../src/IDuelyVault.sol";
@@ -782,7 +783,7 @@ contract DuelyV2SecurityTest is Test {
         );
     }
 
-    /// The operational mitigation that exists today: the pauser freezes LP exits as soon as a dispute
+    /// NOT a guarantee. The operational mitigation that exists today, in the favorable case only: the pauser freezes LP exits as soon as a dispute
     /// appears, so the loss is shared pro rata. (It cannot beat a transaction already in the same block.)
     function test_pauserCanFreezeExitsOnDispute_soLossIsSharedProRata() public {
         uint256 id = _advanced(1000 * E18);
@@ -801,9 +802,8 @@ contract DuelyV2SecurityTest is Test {
         assertApproxEqRel(_lpValue(lp2), nav * 1000 / 12_000, 1e9);
     }
 
-    /// D3: LPs can no longer withdraw past the 80% utilization cap. The residual (KNOWN, S-03): the cap
-    /// bounds total utilization, not per-invoice concentration, so one open advance can still exceed 25%
-    /// of the shrunken NAV.
+    /// D3 GUARANTEE: LPs can no longer withdraw past the 80% utilization cap. This says nothing about
+    /// per-invoice concentration (see the KNOWN test below).
     function test_withdrawalsCannotPushUtilizationPastTheCap() public {
         _advanced(1000 * E18);
         _advanced(1000 * E18); // P = 1,800
@@ -825,8 +825,8 @@ contract DuelyV2SecurityTest is Test {
         assertGt(vault.utilizationBps(), 7990, "LPs withdrew up to the cap, not beyond");
         assertLe(vault.utilizationBps(), 8000);
         assertEq(vault.maxAdvanceNow(), 0);
-        // Residual: each 900 advance is now ~40% of NAV, above the 25% per-invoice funding cap.
-        assertGt(900 * E18 * 10_000 / vault.totalAssets(), 3900);
+        // (The per-invoice concentration this does NOT bound is pinned separately in
+        // test_KNOWN_perInvoiceConcentrationCanExceed25PercentAfterExits.)
     }
 
     /// KNOWN (High, trust): the admin can grant itself any role, so admin == every other role.
@@ -849,25 +849,46 @@ contract DuelyV2SecurityTest is Test {
         // Mitigation is operational: admin must be a multisig/timelock, distinct from every other role.
     }
 
-    /// KNOWN (High, liveness): no timeout. Nobody but the client can settle an undisputed advanced
-    /// invoice, however long it sits.
     function test_KNOWN_stuckInvoice_hasNoTimeout() public {
         uint256 id = _advanced(1000 * E18);
         vm.warp(block.timestamp + 5 * 365 days);
+        bytes32 operatorRole = escrow.OPERATOR_ROLE();
+
+        // Nobody but the client can approve (NotInvoiceClient is the reason, not some unrelated revert).
         address[4] memory others = [operator, evaluator, admin, freelancer];
         for (uint256 i; i < others.length; i++) {
-            vm.startPrank(others[i]);
-            vm.expectRevert();
+            vm.prank(others[i]);
+            vm.expectRevert(abi.encodeWithSelector(IInvoiceAdvanceV2.NotInvoiceClient.selector, id));
             escrow.approveCompletion(id);
-            vm.expectRevert();
-            escrow.resolveDispute(id, false); // not Disputed: the operator cannot force a ruling
-            vm.stopPrank();
+        }
+        // The operator is the only one who may rule, but only on a DISPUTED invoice: it cannot force one.
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IInvoiceAdvanceV2.InvalidStatus.selector,
+                id,
+                IInvoiceAdvanceV2.InvoiceStatus.Advanced
+            )
+        );
+        escrow.resolveDispute(id, false);
+        // Everyone else is simply not authorized to rule at all.
+        address[3] memory nonOperators = [evaluator, admin, freelancer];
+        for (uint256 i; i < nonOperators.length; i++) {
+            vm.prank(nonOperators[i]);
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    IAccessControl.AccessControlUnauthorizedAccount.selector,
+                    nonOperators[i],
+                    operatorRole
+                )
+            );
+            escrow.resolveDispute(id, false);
         }
         assertEq(vault.outstandingPrincipal(), 900 * E18, "principal still locked after five years");
         assertEq(uint8(vault.getAdvance(id).status), uint8(IDuelyVault.AdvanceStatus.Open));
     }
 
-    /// Economics of a self-dealing client+freelancer pair that fools the evaluator: without the operator's
+    /// CONDITIONAL, not a guarantee: assumes an honest operator. Economics of a self-dealing client+freelancer pair that fools the evaluator: without the operator's
     /// help it cannot profit (best case -30, abandoning costs -100), but abandoning locks vault capital.
     function test_selfDealingPair_cannotProfitWithoutTheOperator() public {
         address sc = makeAddr("selfClient");
@@ -912,5 +933,110 @@ contract DuelyV2SecurityTest is Test {
         escrow.claim(freelancer);
         assertEq(rlusd.balanceOf(address(escrow)), 0);
         _assertConsistent();
+    }
+
+    // ================================================================== A6: further documented limitations
+    // Each test below asserts that the RISK EXISTS. If a future change removes the risk, the test fails
+    // and must be rewritten as a guarantee on purpose; passing here is never a security property.
+
+    /// KNOWN (S-03 residual): the 80% cap bounds total utilization, not concentration. After LPs exit up
+    /// to the cap, a single open 900 advance is far above the 25% per-invoice cap that applied at funding.
+    function test_KNOWN_perInvoiceConcentrationCanExceed25PercentAfterExits() public {
+        _advanced(1000 * E18);
+        _advanced(1000 * E18);
+        address[3] memory lps = [lp1, lp2, lp3];
+        for (uint256 round; round < 2; round++) {
+            for (uint256 i; i < lps.length; i++) {
+                uint256 m = vault.maxRedeem(lps[i]);
+                if (m > 0) {
+                    vm.prank(lps[i]);
+                    vault.redeem(m, lps[i], lps[i]);
+                }
+            }
+        }
+        uint256 share = 900 * E18 * 10_000 / vault.totalAssets();
+        assertGt(share, 2500, "one open advance is now above 25% of NAV");
+    }
+
+    /// KNOWN (S-07 residual): repaying the vault needs a working token, so an issuer pause (or a blacklisted
+    /// vault) blocks settlement of ADVANCED invoices for as long as it lasts. Only invoices that move no
+    /// tokens (no advance) and the refund ruling are unaffected.
+    function test_KNOWN_issuerPauseBlocksSettlementOfAdvancedInvoices() public {
+        uint256 advanced = _advanced(1000 * E18);
+        uint256 plain = _funded(1000 * E18);
+        rlusd.pause();
+        vm.prank(client);
+        vm.expectRevert(); // the vault's pull from the escrow reverts inside the token
+        escrow.approveCompletion(advanced);
+        vm.prank(client);
+        escrow.approveCompletion(plain); // moves no tokens: succeeds
+        assertEq(uint8(vault.getAdvance(advanced).status), uint8(IDuelyVault.AdvanceStatus.Open));
+        rlusd.unpause();
+    }
+
+    /// KNOWN (S-08): after an issuer clawback from the escrow a credit can be left unpayable. The contracts
+    /// keep every record intact (nothing is lost), but only a top-up can make the claim succeed.
+    function test_KNOWN_clawbackFromEscrowCanLeaveACreditUnpayable() public {
+        uint256 id = _funded(1000 * E18);
+        vm.prank(client);
+        escrow.approveCompletion(id); // credits the freelancer 1000
+        rlusd.clawback(address(escrow), 400 * E18);
+        assertLt(
+            rlusd.balanceOf(address(escrow)),
+            escrow.totalClaimable(),
+            "insolvent against its credits"
+        );
+        vm.expectRevert();
+        escrow.claim(freelancer);
+        assertEq(
+            escrow.claimable(freelancer), 1000 * E18, "the record survives, the money does not"
+        );
+    }
+
+    /// KNOWN (S-02, mirror image): a depositor who joins while an advance is disputed buys shares at the
+    /// unimpaired price and then absorbs part of a loss that was already likely.
+    function test_KNOWN_depositorDuringADisputeInheritsPartOfTheLoss() public {
+        uint256 id = _advanced(1000 * E18);
+        _disputed(id);
+        address late = makeAddr("lateDepositor");
+        rlusd.mint(late, 12_000 * E18);
+        vm.startPrank(late);
+        rlusd.approve(address(vault), type(uint256).max);
+        vault.deposit(12_000 * E18, late);
+        vm.stopPrank();
+        vm.prank(operator);
+        escrow.resolveDispute(id, false); // 900 loss
+        // The late depositor owns half the vault and so bears half of the 900, though it joined after the dispute.
+        assertLt(_lpValue(late), 12_000 * E18 - 400 * E18);
+    }
+
+    /// KNOWN (S-12): a pause can freeze LP exits indefinitely; only the operator can lift it, and nothing in
+    /// the contracts limits how long it lasts.
+    function test_KNOWN_pauseCanFreezeExitsIndefinitely() public {
+        vm.prank(pauser);
+        vault.pause();
+        vm.warp(block.timestamp + 5 * 365 days);
+        assertEq(vault.maxRedeem(lp1), 0);
+        vm.prank(lp1);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vault.redeem(1e6, lp1, lp1);
+        vm.prank(pauser);
+        vm.expectRevert(); // the pauser cannot undo it
+        vault.unpause();
+    }
+
+    /// KNOWN (S-06): the operator's ruling is unconstrained on-chain. For the same kind of disputed advance it
+    /// can award the escrow either way, and a refund ruling books the loss on the LPs.
+    function test_KNOWN_operatorRulingIsUnconstrainedOnChain() public {
+        uint256 a = _advanced(1000 * E18);
+        uint256 b = _advanced(1000 * E18);
+        _disputed(a);
+        _disputed(b);
+        vm.prank(operator);
+        escrow.resolveDispute(a, true);
+        vm.prank(operator);
+        escrow.resolveDispute(b, false);
+        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(vault.totalRealizedLosses(), 900 * E18);
     }
 }

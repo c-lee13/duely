@@ -151,3 +151,17 @@ None of this is claimed to be mitigated by this MVP. Treat RLUSD runs as testnet
 
 The Demo USD token is a mock, labeled as such everywhere; it is not USDC or RLUSD. RLUSD is the
 issuer's token and is never a demo token.
+
+## V2 (pooled LP vault): `DuelyVault` + `InvoiceAdvanceV2` (live on XRPL EVM Testnet)
+
+V2 is additive. It has its own manifest and ABIs and never touches the three V1 files above.
+
+| File | Role |
+|---|---|
+| `xrpl-evm-testnet-v2.json` | V2 manifest: addresses, deploy/link transactions and blocks, roles, parameters, ABI hashes, verification summary. Written by `script/write_manifest_v2.py` from real broadcast receipts, cross-checked against the chain, and only after `script/verify_v2.py` passes. Refuses to overwrite without `--overwrite`. |
+| `abi/DuelyVault.json`, `abi/InvoiceAdvanceV2.json` | Raw ABIs from the compiled artifacts (`script/export-abi-v2.mjs`). |
+
+From `contracts/`: `python3 -I script/verify_v2.py` (read-only live check), `node script/export-abi-v2.mjs --check`
+(generated files are current), `python3 -I script/write_manifest_v2.py` (manifest). Typed copies for the web app are
+`lib/chain/generated/{duelyVaultAbi,invoiceAdvanceV2Abi,deploymentV2,v2}.ts`. Integration guide:
+`docs/CONTRACT_INTEGRATION_V2.md`; deployment steps: `docs/V2_DEPLOY_RUNBOOK.md`.

@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "chainId": 1449000,
+  "network": "xrpl-evm-testnet",
+  "explorer": "https://explorer.testnet.xrplevm.org",
+  "rpc": {
+    "foundryAlias": "xrpl_evm_testnet",
+    "serverEnv": "XRPL_EVM_RPC_URL",
+    "publicEnv": "NEXT_PUBLIC_XRPL_EVM_RPC_URL",
+    "note": "No RPC URL is stored here. The server/Foundry URL is a secret; the browser uses the public RPC."
+  },
+  "deployer": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+  "sourceCommit": "a06209e",
+  "paymentToken": {
+    "name": "RLUSD",
+    "symbol": "RLUSD",
+    "address": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+    "decimals": 18,
+    "external": true,
+    "isDemoToken": false
+  },
+  "vault": {
+    "address": "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+    "contract": "DuelyVault",
+    "deployTxHash": "0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70",
+    "deployBlock": 9234793,
+    "gasUsed": 4082089,
+    "constructorArguments": {
+      "asset": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+      "admin": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+      "operator": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+      "pauser": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+    },
+    "shareToken": {
+      "name": "Duely Vault Share",
+      "symbol": "dvRLUSD",
+      "decimals": 24
+    }
+  },
+  "escrow": {
+    "address": "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96",
+    "contract": "InvoiceAdvanceV2",
+    "deployTxHash": "0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5",
+    "deployBlock": 9234835,
+    "gasUsed": 2984863,
+    "constructorArguments": {
+      "paymentToken": "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
+      "vault": "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+      "admin": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+      "operator": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+      "evaluator": "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+    }
+  },
+  "link": {
+    "call": "DuelyVault.setEscrow(address)",
+    "escrow": "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96",
+    "txHash": "0xc5331536ed041b595e8674ea1ffa22a5d5c5653497956caa8f6cc512ffc5b6a5",
+    "block": 9234849,
+    "gasUsed": 55270,
+    "sentBy": "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
+    "note": "One-time and irreversible; confirmed by exactly one EscrowSet event."
+  },
+  "roles": {
+    "admin": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "operator": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "pauser": "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
+    "evaluator": "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb",
+    "vault": {
+      "DEFAULT_ADMIN_ROLE": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ],
+      "OPERATOR_ROLE": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ],
+      "PAUSER_ROLE": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ]
+    },
+    "escrow": {
+      "DEFAULT_ADMIN_ROLE": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ],
+      "OPERATOR_ROLE": [
+        "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E"
+      ],
+      "EVALUATOR_ROLE": [
+        "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb"
+      ]
+    },
+    "note": "Testnet MVP: admin == operator == pauser == deployer (one key). The evaluator is separate. Not suitable for production (decision D5)."
+  },
+  "parameters": {
+    "financingFeeBps": 300,
+    "advanceBps": 9000,
+    "maxUtilizationBps": 8000,
+    "maxInvoiceExposureBps": 2500,
+    "vaultDecimalsOffset": 6,
+    "example": {
+      "invoice": "1000",
+      "advance": "900",
+      "fee": "30",
+      "vaultRepayment": "930",
+      "freelancerRemainder": "70"
+    }
+  },
+  "abis": {
+    "DuelyVault": {
+      "file": "contracts/deployments/abi/DuelyVault.json",
+      "typescript": "lib/chain/generated/duelyVaultAbi.ts",
+      "sha256": "8383fd195c3c7939873ffea149ab3bcae29147be0ad2787330f80da5aebf30e3",
+      "entries": 105
+    },
+    "InvoiceAdvanceV2": {
+      "file": "contracts/deployments/abi/InvoiceAdvanceV2.json",
+      "typescript": "lib/chain/generated/invoiceAdvanceV2Abi.ts",
+      "sha256": "40acc17c8a91503af81ba1ffa6fdf3d49e8af34ac796ffa61edfeece2781c000",
+      "entries": 55
+    }
+  },
+  "verification": {
+    "tool": "contracts/script/verify_v2.py",
+    "verifiedAtBlock": 9234931,
+    "checksPassed": 73,
+    "initialState": "totalSupply, totalAssets, outstandingPrincipal, totalEscrow, totalClaimable and all contract RLUSD balances were 0"
+  },
+  "transactions": [
+    {
+      "contractName": "DuelyVault",
+      "contractAddress": "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+      "transactionHash": "0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70",
+      "blockNumber": 9234793,
+      "gasUsed": 4082089,
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70"
+    },
+    {
+      "contractName": "InvoiceAdvanceV2",
+      "contractAddress": "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96",
+      "transactionHash": "0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5",
+      "blockNumber": 9234835,
+      "gasUsed": 2984863,
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5"
+    },
+    {
+      "contractName": "DuelyVault",
+      "function": "setEscrow(address)",
+      "contractAddress": "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+      "transactionHash": "0xc5331536ed041b595e8674ea1ffa22a5d5c5653497956caa8f6cc512ffc5b6a5",
+      "blockNumber": 9234849,
+      "gasUsed": 55270,
+      "explorerUrl": "https://explorer.testnet.xrplevm.org/tx/0xc5331536ed041b595e8674ea1ffa22a5d5c5653497956caa8f6cc512ffc5b6a5"
+    }
+  ]
+}

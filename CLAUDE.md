@@ -2,6 +2,8 @@
 
 > **Team contract.** All coding agents must read this file before editing. This document defines the current MVP and cross-team interfaces, not the post-MVP roadmap. If actual repository files conflict with the suggested layout, inspect and preserve the existing project; do not reorganize without team approval.
 
+> **V1 vs V2.** Everything below describes **V1** (operator-funded reserve) and stays in force for the deployed V1 contracts. **V2** (pooled LP vault: `DuelyVault.sol` + `InvoiceAdvanceV2.sol`, RLUSD only) is additive and governed by `docs/VAULT_IMPLEMENTATION_SPEC.md`. Where the two disagree about LPs, vaults, reserves or fees, that document governs V2 and this file governs V1. V1 contracts, tests, ABIs and deployments must not be modified by V2 work.
+
 ## 1. Product goal and demo
 
 Duely lets a client lock payment for freelance work, a freelancer submit evidence against criteria agreed in advance, and the platform evaluate the submission with AI. **After a passing evaluation AND an explicit freelancer request**, an authorized platform signer releases an advance equal to **90% of the invoice** from a separately **platform-prefunded reserve**. Client approval then settles the invoice: escrow reimburses the reserve for the amount actually advanced and pays the remaining escrow to the freelancer.
@@ -13,7 +15,7 @@ Duely lets a client lock payment for freelance work, a freelancer submit evidenc
 ## 2. Hard MVP boundaries
 
 - XRPL **EVM** testnet, Solidity/Foundry/OpenZeppelin; **not** native XRPL Escrow.
-- **One `InvoiceAdvance.sol` contract**, a simple ERC-20 demo token, and platform-funded reserve. **NO external LPs, ERC-4626 vault, lending protocol, yield distribution, or public depositors.**
+- **(V1)** **One `InvoiceAdvance.sol` contract**, a simple ERC-20 demo token, and platform-funded reserve. **NO external LPs, ERC-4626 vault, lending protocol, yield distribution, or public depositors.** *(V2 deliberately adds one pooled ERC-4626 LP vault for RLUSD only, per `docs/VAULT_IMPLEMENTATION_SPEC.md`; lending protocols, yield strategies and other assets remain out of scope.)*
 - Two payment-token deployments exist on XRPL EVM testnet, each with its own immutable `InvoiceAdvance`, selected by `DUELY_DEPLOYMENT=dusd|rlusd` (default `dusd`): **dUSD** (mock, 6 decimals, labeled *demo token*) and **RLUSD** (the issuer's real testnet token, 18 decimals, live-tested end to end in A6.6.4b). Never label dUSD as RLUSD, and never label RLUSD a demo token. RLUSD is issuer-controlled (pause, clawback, upgrade); this is documented, not mitigated. Details: `docs/CHAIN_SDK_HANDOFF.md`, `docs/TRACK_B_A7_HANDOFF.md`.
 - Next.js App Router + TypeScript + shadcn/Base UI, wagmi/viem, Supabase Postgres/Storage, OpenAI structured evaluation, MetaMask.
 - No x402, LangGraph orchestration, Privy, Mastercard fiat integration, credit underwriting, or automated arbitration in MVP.
@@ -185,7 +187,7 @@ Use one documented JSON error shape: `{ error: { code: string, message: string }
 3. **During work:** stay inside owned files; prefer small commits and short-lived branches. Coordinate shared-file changes before merging.
 4. **For each PR:** include files changed, API/ABI/type changes, commands run, tests passed/failed, demo impact, and unresolved TODOs. Never claim tests passed if they were not run.
 5. **On integration:** test the actual wallet-to-chain-to-backend flow. A UI-only simulated payout is not a successful payment demo.
-6. **No scope creep:** do not add LP vaults, x402, Privy, Mastercard, new chains, or agent frameworks without explicit team approval.
+6. **No scope creep:** do not add LP vaults beyond the approved V2 vault (see `docs/VAULT_IMPLEMENTATION_SPEC.md`), x402, Privy, Mastercard, new chains, or agent frameworks without explicit team approval.
 
 ## 11. Acceptance tests and demo completion
 

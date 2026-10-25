@@ -56,6 +56,8 @@ function mapCode(code: string, status: number): DomainErrorCode {
     case "CONTENT_MISMATCH":
     case "INVALID_PATH":
       return "INVALID_INPUT"
+    case "EVIDENCE_NOT_EVALUABLE":
+      return "INVALID_INPUT"
     case "INTEGRATION_UNAVAILABLE":
     case "EVALUATOR_UNAVAILABLE":
     case "CHAIN_UNAVAILABLE":

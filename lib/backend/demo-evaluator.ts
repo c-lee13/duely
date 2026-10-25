@@ -44,9 +44,11 @@ export const demoEvaluator: Evaluator = {
 }
 
 /**
- * Which evaluator runs. The demo evaluator needs an explicit opt-in (DUELY_EVALUATOR_MODE=demo) AND a non-production
- * runtime; otherwise evaluation is disabled and the endpoint answers 503. There is no live evaluator yet.
+ * Which evaluator runs, from DUELY_EVALUATOR_MODE. "demo" (deterministic, simulated) needs a non-production runtime;
+ * "gemini" (real) needs GEMINI_API_KEY and GEMINI_EVALUATION_MODEL. Anything else disables evaluation (the endpoint answers 503).
  */
-export function resolveEvaluatorMode(env: { DUELY_EVALUATOR_MODE?: string; NODE_ENV?: string }): "disabled" | "demo" {
+export function resolveEvaluatorMode(env: { DUELY_EVALUATOR_MODE?: string; NODE_ENV?: string }): "disabled" | "demo" | "gemini" {
+  // "gemini" is the real evaluator: it needs an explicit opt-in (it costs money) and valid GEMINI_* configuration.
+  if (env.DUELY_EVALUATOR_MODE === "gemini") return "gemini"
   return env.DUELY_EVALUATOR_MODE === "demo" && env.NODE_ENV !== "production" ? "demo" : "disabled"
 }

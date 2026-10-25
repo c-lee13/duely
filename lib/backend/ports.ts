@@ -106,12 +106,29 @@ export interface EvaluatorOutput {
   /** True for deterministic development evaluators. Such results can never authorize a payment. */
   simulated: boolean
   score: number
-  criteriaResults: Array<{ criterion: string; passed: boolean; reason: string }>
+  criteriaResults: Array<{
+    criterion: string
+    passed: boolean
+    reason: string
+    /** Optional audit detail stored with the result. Evaluators that classify criteria (Gemini) fill these in. */
+    assessment?: "verified" | "partial" | "unsupported"
+    evidenceQuote?: string | null
+    weight?: number
+    points?: number
+  }>
   summary: string
 }
 
+/** Thrown by an evaluator that cannot read this kind of evidence. Reported as 422, distinct from an evaluator failure. */
+export class UnsupportedEvidenceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "UnsupportedEvidenceError"
+  }
+}
+
 export interface Evaluator {
-  /** disabled = no evaluator is configured (the endpoint answers 503). demo = deterministic, simulated. live = a real model (not built yet). */
+  /** disabled = no evaluator is configured (the endpoint answers 503). demo = deterministic, simulated. live = a real model (Gemini). */
   readonly mode: "disabled" | "demo" | "live"
   evaluate(input: EvaluatorInput): Promise<EvaluatorOutput>
 }
@@ -181,7 +198,16 @@ export interface EvaluationData {
   state: "running" | "completed" | "error"
   score: number | null
   passed: boolean | null
-  criteria_results: Array<{ criterion: string; passed: boolean; reason: string; mandatory: boolean }> | null
+  criteria_results: Array<{
+    criterion: string
+    passed: boolean
+    reason: string
+    mandatory: boolean
+    assessment?: "verified" | "partial" | "unsupported"
+    evidenceQuote?: string | null
+    weight?: number
+    points?: number
+  }> | null
   summary: string | null
   pass_rule: string
   simulated: boolean

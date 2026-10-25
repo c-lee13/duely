@@ -5,6 +5,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import type { Database } from "@/lib/supabase/database.types"
 import { createSupabaseObjectStore, getSessionUserId } from "@/lib/evidence/server"
 import { mapAdvanceInsertError, mapEvaluationInsertError } from "./db-errors"
+import { createGeminiEvaluatorFromEnv } from "@/lib/ai/evaluation-service"
 import { demoEvaluator, resolveEvaluatorMode } from "./demo-evaluator"
 import type { HandlerContext } from "./handlers"
 import {
@@ -248,8 +249,11 @@ export function getAdvanceSigner(): AdvanceSigner {
   return unavailableSigner
 }
 
+/** DUELY_EVALUATOR_MODE: "gemini" = the real evaluator, "demo" = deterministic and simulated (never in production), otherwise off. */
 export function getEvaluator(): Evaluator {
-  return resolveEvaluatorMode(process.env) === "demo" ? demoEvaluator : disabledEvaluator
+  const mode = resolveEvaluatorMode(process.env)
+  if (mode === "gemini") return createGeminiEvaluatorFromEnv(process.env)
+  return mode === "demo" ? demoEvaluator : disabledEvaluator
 }
 
 export function getBackendDeps(): BackendDeps {

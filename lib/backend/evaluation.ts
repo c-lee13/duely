@@ -5,7 +5,7 @@ import { ApiError } from "./api-error"
 import { loadInvoiceAsParty, requireUser, requireVerifiedWallets } from "./access"
 import { toEvaluationView, type EvaluationView } from "./invoices"
 import { DEMO_MODEL, DEMO_PROMPT_VERSION } from "./demo-evaluator"
-import { DuplicateEvaluationError, type BackendDeps, type EvaluationData, type EvaluatorOutput } from "./ports"
+import { DuplicateEvaluationError, UnsupportedEvidenceError, type BackendDeps, type EvaluationData, type EvaluatorOutput } from "./ports"
 
 /** How much of the stored evidence an evaluator is handed. */
 export const EVALUATION_EVIDENCE_BYTES = 256 * 1024
@@ -99,7 +99,17 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
     validateOutput(out, criteria)
     // A development evaluator can never produce a result that looks real.
     if (deps.evaluator.mode === "demo" && !out.simulated) throw new Error("demo evaluator returned a non-simulated result")
-    const results = out.criteriaResults.map((r, i) => ({ criterion: r.criterion, passed: r.passed, reason: r.reason, mandatory: criteria[i].mandatory }))
+    const results = out.criteriaResults.map((r, i) => ({
+      criterion: r.criterion,
+      passed: r.passed,
+      reason: r.reason,
+      mandatory: criteria[i].mandatory,
+      // Audit detail from classifying evaluators; absent for the deterministic demo evaluator.
+      ...(r.assessment ? { assessment: r.assessment } : {}),
+      ...(r.evidenceQuote !== undefined ? { evidenceQuote: r.evidenceQuote } : {}),
+      ...(r.weight !== undefined ? { weight: r.weight } : {}),
+      ...(r.points !== undefined ? { points: r.points } : {}),
+    }))
     const final = await deps.db.finalizeEvaluation(running.id, {
       model: out.model,
       prompt_version: out.promptVersion,
@@ -113,6 +123,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
   } catch (e) {
     // The failure is recorded (and retryable) but its detail is not echoed: it could contain evidence content.
     await deps.db.failEvaluation(running.id, e instanceof Error ? e.message.slice(0, 200) : "evaluation failed").catch(() => undefined)
+    if (e instanceof UnsupportedEvidenceError) throw new ApiError("EVIDENCE_NOT_EVALUABLE", e.message)
     throw new ApiError("EVALUATOR_FAILED", "The evaluation couldn't be completed. Try again.")
   }
 }

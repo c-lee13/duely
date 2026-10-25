@@ -11,11 +11,14 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "supabase:check": "node scripts/check-supabase.mjs",
-    "test": "tsx --test tests/*.test.ts",
-    "seed:dev-fixture": "tsx scripts/seed-dev-fixture.ts"
+    "test": "tsx --conditions=react-server --test tests/*.test.ts",
+    "seed:dev-fixture": "tsx scripts/seed-dev-fixture.ts",
+    "test:gemini": "tsx --conditions=react-server scripts/test-gemini.ts",
+    "test:gemini-evaluation": "tsx --conditions=react-server scripts/test-gemini-evaluation.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
+    "@google/genai": "^2.31.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.118.0",
     "class-variance-authority": "^0.7.1",

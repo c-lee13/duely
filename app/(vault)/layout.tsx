@@ -10,10 +10,10 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
       <header className="border-b bg-background/90 pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
           <span className="flex items-center gap-2">
-            <span className="flex size-7 items-center justify-center rounded-lg bg-navy text-sm font-bold text-mint" aria-hidden>
-              D
-            </span>
-            <span className="text-base font-semibold tracking-tight">Duely</span>
+            {/* eslint-disable-next-line @next/next/no-img-element -- plain img keeps this layout independent of the app shell */}
+            <img src="/branding/logo.png" alt="" width={32} height={32} className="size-8" />
+            {/* eslint-disable-next-line @next/next/no-img-element -- plain img keeps this layout independent of the app shell */}
+            <img src="/branding/wordmark.png" alt="Duely" width={61} height={24} className="h-6 w-auto" />
           </span>
           <Link href="/" className="rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
             Back to the app

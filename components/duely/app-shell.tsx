@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
@@ -77,18 +78,12 @@ function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
-/**
- * Brand mark. PLACEHOLDER: public/branding/ has no logo files yet.
- * When the real Duely logo is added, replace the <span> mark below with
- * <Image src="/branding/<file>" alt="" width height /> — this is the only place it appears.
- */
+/** Brand mark: public/branding/logo.png plus the wordmark (public/branding/wordmark.png). Every page header uses this one component. */
 export function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-      <span className="flex size-7 items-center justify-center rounded-lg bg-navy text-sm font-bold text-mint">
-        D
-      </span>
-      <span className="text-base font-semibold tracking-tight">Duely</span>
+      <Image src="/branding/logo.png" alt="" width={32} height={32} className="size-8" priority />
+      <Image src="/branding/wordmark.png" alt="Duely" width={61} height={24} className="h-6 w-auto" priority />
     </Link>
   )
 }

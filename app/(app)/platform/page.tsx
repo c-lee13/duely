@@ -79,7 +79,7 @@ function Reserve({ session }: { session: Session }) {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Platform"
+        eyebrow="Liquidity provider"
         title={isVault ? "Liquidity vault" : "Reserve"}
         description={
           isVault

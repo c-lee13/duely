@@ -49,7 +49,7 @@ export const ROLE_HOME: Record<DemoRole, string> = {
 const ROLE_META: Record<DemoRole, { label: string; icon: typeof Building2 }> = {
   client: { label: "Client", icon: Building2 },
   freelancer: { label: "Freelancer", icon: Briefcase },
-  platform: { label: "Platform", icon: Landmark },
+  platform: { label: "Liquidity provider", icon: Landmark },
 }
 
 const NAV: Record<DemoRole, Array<{ href: string; label: string }>> = {

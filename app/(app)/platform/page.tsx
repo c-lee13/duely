@@ -84,7 +84,7 @@ function Reserve({ session }: { session: Session }) {
         description={
           isVault
             ? "Advances are funded by the liquidity vault (supplied by depositors, not the platform) and are separate from client escrow. The operator resolves disputes here."
-            : "The reserve is funded by the platform and pays 90% advances. It is separate from client escrow."
+            : "The reserve is funded by the platform and pays advances at the rate each client chose (at most 90% of the invoice). It is separate from client escrow."
         }
       />
       {balances.error ? (

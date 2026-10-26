@@ -10,7 +10,7 @@ import {IDuelyVault} from "../../src/IDuelyVault.sol";
 contract MockEscrow {
     address public vault;
     address public paymentToken;
-    uint256 public constant FEE_BPS = 300;
+    uint256 public constant FEE_BPS = 1_000;
     uint256 public constant ADVANCE_BPS = 9000;
 
     constructor(address vault_, address token_) {

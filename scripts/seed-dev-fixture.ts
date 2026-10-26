@@ -58,7 +58,7 @@ async function main() {
     p_invoice_id: String(Date.now()), // not an on-chain id
     p_client: as === "client" ? (wallet as `0x${string}`) : COUNTERPARTY,
     p_freelancer: as === "freelancer" ? (wallet as `0x${string}`) : COUNTERPARTY,
-    p_amount: tokens(1000),
+    p_amount: tokens(1),
     p_criteria_hash: computeCriteriaHash(criteria),
     p_canonical: canonicalCriteriaString(criteria),
     p_criteria: criteria,

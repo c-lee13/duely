@@ -90,7 +90,7 @@ export function Pill({
 const ONCHAIN: Record<OnchainInvoiceStatus, { tone: Tone; icon: LucideIcon; label: string; hint: string }> = {
   Created: { tone: "neutral", icon: CircleDashed, label: "Awaiting funding", hint: "Invoice created; escrow not funded yet" },
   Funded: { tone: "info", icon: Lock, label: "Funded in escrow", hint: "Full amount locked in escrow" },
-  Advanced: { tone: "advance", icon: Rocket, label: "90% advanced", hint: "Reserve advanced 90%; awaiting client approval" },
+  Advanced: { tone: "advance", icon: Rocket, label: "Advanced", hint: "Advance paid to the freelancer; awaiting client approval" },
   Disputed: { tone: "danger", icon: AlertOctagon, label: "Disputed · frozen", hint: "Settlement frozen pending manual resolution" },
   Settled: { tone: "success", icon: CheckCircle2, label: "Settled", hint: "Client approved; escrow paid out" },
   Cancelled: { tone: "neutral", icon: CircleDashed, label: "Cancelled", hint: "Cancelled by the client before funding" },

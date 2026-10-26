@@ -326,18 +326,21 @@ describe("empty vault and insufficient liquidity (backend adapter + eligibility)
 })
 
 describe("v2 money previews", () => {
-  it("fee is floor(amount * 3%) and the projection repays the vault advance + fee", () => {
-    assert.equal(advanceFeeFor(RL(1000).toString()), RL(30).toString())
+  it("fee is floor(amount * 10%) and the projection repays the vault advance + fee", () => {
+    assert.equal(advanceFeeFor(RL(1000).toString()), RL(100).toString())
     const inv = invoiceDetail({ amount: RL(1000).toString(), advanceAmount: RL(900).toString(), onchainStatus: "Advanced" })
-    assert.deepEqual(settlementProjection(inv), { reserveCredit: RL(930).toString(), toFreelancer: RL(70).toString(), fee: RL(30).toString() })
+    assert.deepEqual(settlementProjection(inv), { reserveCredit: RL(1000).toString(), toFreelancer: "0", fee: RL(100).toString() })
+    // A 50% advance rate: 450 advanced, the same 100 fee, 450 left for the freelancer to claim.
+    const half = invoiceDetail({ amount: RL(1000).toString(), advanceAmount: RL(450).toString(), advanceShareBps: 5000, onchainStatus: "Advanced" })
+    assert.deepEqual(settlementProjection(half), { reserveCredit: RL(550).toString(), toFreelancer: RL(450).toString(), fee: RL(100).toString() })
     const none = settlementProjection(invoiceDetail({ amount: RL(1000).toString() }))
     assert.deepEqual(none, { reserveCredit: "0", toFreelancer: RL(1000).toString(), fee: "0" })
   })
 
-  it("settled-invoice figures: vault repaid 930, freelancer total 970", () => {
+  it("settled-invoice figures: vault repaid 1000, freelancer total 900 (100% rate)", () => {
     const f = figuresFor("Settled", RL(1000).toString(), RL(900).toString(), true)
-    assert.equal(f.reserveCredited, RL(930).toString())
-    assert.equal(f.freelancerReceived, RL(970).toString())
+    assert.equal(f.reserveCredited, RL(1000).toString())
+    assert.equal(f.freelancerReceived, RL(900).toString())
     assert.equal(figuresFor("Settled", RL(1000).toString(), "0", true).freelancerReceived, RL(1000).toString())
   })
 
@@ -471,7 +474,7 @@ describe("lifecycle under v2: verified by V2 events, with signer permissions enf
 // ---- fixtures ------------------------------------------------------------------------------------------------------
 function invoiceDetail(o: Partial<InvoiceDetail> = {}): InvoiceDetail {
   return {
-    invoiceId: "1", client: lc(A.client) as never, freelancer: lc(A.freelancer) as never, amount: RL(1000).toString(), advanceAmount: "0", criteriaHash: ("0x" + "11".repeat(32)) as never,
+    invoiceId: "1", client: lc(A.client) as never, freelancer: lc(A.freelancer) as never, amount: RL(1000).toString(), advanceAmount: "0", advanceShareBps: 10000, criteriaHash: ("0x" + "11".repeat(32)) as never,
     onchainStatus: "Funded", submissionStatus: "Evaluated", title: "t", criteria: [], criteriaVersion: 1, clientName: "c", freelancerName: "f", createdAt: new Date().toISOString(),
     escrowBalance: RL(1000).toString(), freelancerReceived: "0", reserveCredited: "0", financialStatusVerified: true, ...o,
   } as InvoiceDetail

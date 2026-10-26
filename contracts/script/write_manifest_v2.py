@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Build contracts/deployments/xrpl-evm-testnet-v2.json for the Duely V2 deployment.
 
-Usage (from contracts/):  python3 -I script/write_manifest_v2.py [--overwrite]
+Usage (from contracts/):  python3 -I script/write_manifest_v2.py [--overwrite] [--broadcast-dir DIR]
 
-Sources of truth, in order:
-  1. forge broadcast records for script/DeployV2.s.sol (real receipts only; every tx must have succeeded);
-  2. the live chain: every transaction receipt is re-read and must agree (block, status, address);
-  3. script/verify_v2.py, which must pass in full (74-ish checks pinned to one block) before anything is written.
+The deployment (addresses, transaction hashes) is DISCOVERED from the forge broadcast records for
+script/DeployV2.s.sol by script/v2_deployment.py, which requires exactly one vault creation, one escrow creation
+and one setEscrow link, all successful, all for chain 1449000, all consistent with each other. Nothing about a
+particular deployment is hardcoded here. Then, in order:
+  1. the live chain: every transaction receipt is re-read and must agree with the record (block, status, gas, address);
+  2. script/verify_v2.py is run against the discovered deployment and must pass in full (every check pinned to one
+     block) before anything is written; its report must name the same vault, escrow and transactions;
+  3. the manifest is built from the on-chain facts, never from the records alone.
+Older deployments must be archived out of the broadcast directory first (docs/V2_DEPLOY_RUNBOOK.md).
 
 V1 safety: this writes ONLY xrpl-evm-testnet-v2.json. It never reads or writes the V1 manifests, refuses to
 replace an existing V2 manifest without --overwrite, and refuses to write any URL that is not an explorer link
@@ -20,19 +25,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I does not add the script directory; this is our own module
+import v2_deployment  # noqa: E402
+
 CHAIN_ID = 1449000
 NETWORK = "xrpl-evm-testnet"
 EXPLORER = "https://explorer.testnet.xrplevm.org"
 RPC = "xrpl_evm_testnet"
 OUT = ROOT / "deployments" / "xrpl-evm-testnet-v2.json"
-BROADCAST = ROOT / "broadcast" / "DeployV2.s.sol" / str(CHAIN_ID)
-
 RLUSD = "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3"
-EXPECTED = {
-    "vault": ("DuelyVault", "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8", "0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70"),
-    "escrow": ("InvoiceAdvanceV2", "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96", "0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5"),
-}
-
 
 def die(msg):
     sys.exit(f"write_manifest_v2: {msg}")
@@ -66,28 +67,19 @@ def main():
     if OUT.exists() and "--overwrite" not in sys.argv:
         die(f"{OUT.name} already exists; refusing to overwrite it (pass --overwrite deliberately)")
 
-    # --- 1. broadcast records -> the three transactions
-    found = {}
-    for f in sorted(BROADCAST.glob("run-[0-9]*.json")):
-        run = json.loads(f.read_text())
-        receipts = {r["transactionHash"].lower(): r for r in run["receipts"]}
-        for tx in run["transactions"]:
-            h = tx["hash"].lower()
-            rc = receipts.get(h)
-            if rc is None or str(rc.get("status")) not in ("0x1", "1"):
-                die(f"{f.name}: transaction {h} has no successful receipt")
-            kind = (
-                "vault" if tx.get("contractName") == "DuelyVault"
-                else "escrow" if tx.get("contractName") == "InvoiceAdvanceV2"
-                else "link" if str(tx.get("function", "")).startswith("setEscrow") else None
-            )
-            if kind is None:
-                die(f"{f.name}: unexpected transaction {tx.get('contractName') or tx.get('function')}")
-            found.setdefault(kind, []).append((f.name, run, tx, rc))
-    for k in ("vault", "escrow", "link"):
-        if len(found.get(k, [])) != 1:
-            die(f"expected exactly one {k} transaction in {BROADCAST.relative_to(ROOT)}, found {len(found.get(k, []))}")
-    rec = {k: v[0] for k, v in found.items()}
+    # --- 1. broadcast records -> the one deployment they describe (strict; see v2_deployment.discover)
+    argv = sys.argv
+    bdir = argv[argv.index("--broadcast-dir") + 1] if "--broadcast-dir" in argv else v2_deployment.BROADCAST_DIR
+    try:
+        found = v2_deployment.discover(bdir, CHAIN_ID)
+    except v2_deployment.DiscoveryError as e:
+        die(str(e))
+    rec = {
+        "vault": (found["vault"]["file"], found["vault"]["txHash"]),
+        "escrow": (found["escrow"]["file"], found["escrow"]["txHash"]),
+        "link": (found["link"]["file"], found["link"]["txHash"]),
+    }
+    commits = {found["sourceCommit"]}
 
     roles = env_roles()
     deployer, admin, operator, evaluator = (roles[k] for k in ("DEPLOYER_ADDRESS", "ADMIN_ADDRESS", "OPERATOR_ADDRESS", "EVALUATOR_ADDRESS"))
@@ -95,13 +87,17 @@ def main():
         die("role addresses in .env are not all valid")
     pauser = operator
 
+    # --- 2. every receipt is re-read from the chain
     txs = {}
     for k in ("vault", "escrow", "link"):
-        fname, run, tx, rc = rec[k]
-        h = tx["hash"]
-        live = json.loads(cast("receipt", h, "--rpc-url", RPC, "--json"))  # 2. cross-check with the chain
+        fname, h = rec[k]
+        run = json.loads((Path(bdir) / fname).read_text())
+        rc = next(r for r in run["receipts"] if r["transactionHash"].lower() == h.lower())
+        live = json.loads(cast("receipt", h, "--rpc-url", RPC, "--json"))
         if live["status"] != "0x1" or int(live["blockNumber"], 16) != int(rc["blockNumber"], 16) or int(live["gasUsed"], 16) != int(rc["gasUsed"], 16):
             die(f"{k} transaction disagrees between the broadcast record and the chain")
+        if int(cast("tx", h, "chainId", "--rpc-url", RPC), 0) != CHAIN_ID:
+            die(f"{k} transaction is not for chain {CHAIN_ID}")
         txs[k] = {
             "hash": h,
             "block": int(live["blockNumber"], 16),
@@ -111,27 +107,36 @@ def main():
             "broadcastRecord": f"contracts/broadcast/DeployV2.s.sol/{CHAIN_ID}/{fname}",
             "sourceCommit": run.get("commit"),
         }
-    for k in ("vault", "escrow"):
-        name, addr, h = EXPECTED[k]
-        _, _, tx, _ = rec[k]
-        if tx["hash"].lower() != h.lower() or tx["contractAddress"].lower() != addr.lower():
-            die(f"{k} in the broadcast record is not the confirmed deployment ({addr} / {h})")
-    if rec["link"][2]["arguments"][0].lower() != EXPECTED["escrow"][1].lower() or rec["link"][2]["contractAddress"].lower() != EXPECTED["vault"][1].lower():
-        die("the link transaction is not setEscrow(escrow) on the vault")
+    # On-chain facts decide the addresses: the creation receipts must have produced exactly the discovered contracts.
+    # Foundry records addresses lower-cased; the manifest (and the app files generated from it) use EIP-55 checksums.
+    vault_addr = cast("to-check-sum-address", found["vault"]["address"])
+    escrow_addr = cast("to-check-sum-address", found["escrow"]["address"])
+    for k, addr in (("vault", vault_addr), ("escrow", escrow_addr)):
+        live = json.loads(cast("receipt", txs[k]["hash"], "--rpc-url", RPC, "--json"))
+        if (live.get("contractAddress") or "").lower() != addr.lower():
+            die(f"the {k} creation receipt on chain did not create {addr}")
     if not (txs["vault"]["block"] <= txs["escrow"]["block"] <= txs["link"]["block"]):
         die("transactions are not in the expected order")
-    commits = {t["sourceCommit"] for t in txs.values()}
-    if len(commits) != 1:
-        die(f"transactions were built from different commits: {commits}")
 
     # --- 3. full live verification must pass first
-    p = subprocess.run([sys.executable, "-I", str(ROOT / "script" / "verify_v2.py"), "--json"], capture_output=True, text=True, cwd=ROOT)
+    # Explicit mode: the verifier checks exactly the deployment discovered above, but re-derives all of it from the chain.
+    p = subprocess.run(
+        [sys.executable, "-I", str(ROOT / "script" / "verify_v2.py"), "--json",
+         "--vault", vault_addr, "--escrow", escrow_addr, "--vault-tx", txs["vault"]["hash"], "--escrow-tx", txs["escrow"]["hash"]],
+        capture_output=True, text=True, cwd=ROOT,
+    )
     if p.returncode != 0:
         print(p.stdout[-1500:])
         die("live verification FAILED; not writing a manifest (nothing was changed)")
     report = json.loads([l for l in p.stdout.splitlines() if l.startswith("{")][-1])
-    if report["failed"] or report["linkTransaction"]["hash"].lower() != txs["link"]["hash"].lower():
-        die("verification report disagrees with the broadcast record")
+    if (
+        report["failed"]
+        or (report["linkTransaction"]["hash"] or "").lower() != txs["link"]["hash"].lower()
+        or report["vault"].lower() != vault_addr.lower()
+        or report["escrow"].lower() != escrow_addr.lower()
+        or report["deploymentBlocks"] != {"vault": txs["vault"]["block"], "escrow": txs["escrow"]["block"]}
+    ):
+        die("verification report disagrees with the broadcast record (the on-chain link event, addresses or blocks differ)")
 
     abis = {}
     for name in ("DuelyVault", "InvoiceAdvanceV2"):
@@ -146,7 +151,6 @@ def main():
             "entries": len(json.loads(jp.read_text())),
         }
 
-    vault_addr, escrow_addr = EXPECTED["vault"][1], EXPECTED["escrow"][1]
     manifest = {
         "schemaVersion": 1,
         "chainId": CHAIN_ID,
@@ -197,12 +201,18 @@ def main():
             "note": "Testnet MVP: admin == operator == pauser == deployer (one key). The evaluator is separate. Not suitable for production (decision D5).",
         },
         "parameters": {
-            "financingFeeBps": 300,
+            "financingFeeBps": 1000,
+            "minAdvanceShareBps": 5000,
             "advanceBps": 9000,
             "maxUtilizationBps": 8000,
             "maxInvoiceExposureBps": 2500,
             "vaultDecimalsOffset": 6,
-            "example": {"invoice": "1000", "advance": "900", "fee": "30", "vaultRepayment": "930", "freelancerRemainder": "70"},
+            "advanceRate": "client-chosen per invoice, advanceShareBps 5000..10000 of the 90% ceiling",
+            "example": {
+                "invoice": "1000",
+                "at100pct": {"advance": "900", "fee": "100", "vaultRepayment": "1000", "freelancerRemainder": "0"},
+                "at50pct": {"advance": "450", "fee": "100", "vaultRepayment": "550", "freelancerRemainder": "450"},
+            },
         },
         "abis": abis,
         "verification": {

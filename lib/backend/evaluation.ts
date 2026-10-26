@@ -43,16 +43,20 @@ export interface EvaluateResult {
 }
 
 export async function evaluateSubmission(deps: BackendDeps, input: { userId: string | null; submissionId: string }): Promise<EvaluateResult> {
+  const t0 = Date.now()
+  const step = (label: string) => console.info(`[submit-evidence] evaluate: ${label} (+${Date.now() - t0}ms)`)
   const userId = requireUser(input.userId)
   const wallets = await requireVerifiedWallets(deps.db, userId)
   if (!UUID_RE.test(input.submissionId)) throw new ApiError("NOT_FOUND", "Submission not found.")
 
+  step("verified wallets; loading submission")
   const submission = await deps.db.getSubmission(input.submissionId)
   if (!submission) throw new ApiError("NOT_FOUND", "Submission not found.")
   const { invoice, isFreelancer } = await loadInvoiceAsParty(deps.db, userId, submission.invoice_uuid, deps.scope)
   if (!isFreelancer) throw new ApiError("FORBIDDEN", "Only the freelancer who made this submission can request its evaluation.")
   if (!wallets.includes(submission.freelancer_address)) throw new ApiError("FORBIDDEN", "This submission was made by a different wallet.")
 
+  step("ownership ok; checking latest submission")
   // Only the latest submission is evaluated, so an old result can never stand in for newer evidence.
   const submissions = await deps.db.listSubmissions(invoice.id)
   if (submissions[0]?.id !== submission.id) {
@@ -72,6 +76,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
     throw new ApiError("EVALUATOR_UNAVAILABLE", "Automatic evaluation isn't available yet.")
   }
 
+  step("loading criteria")
   const criteria = await deps.db.getCriteria(invoice.id)
   if (criteria.length !== invoice.criteria_count) throw new ApiError("CRITERIA_INCOMPLETE", "This invoice's acceptance criteria aren't fully recorded.")
   // A GitHub submission carries its repository and commit in the database; the evaluator uses those and never the evidence file,
@@ -83,6 +88,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
   const evidence = github ? new Uint8Array(0) : await deps.objects.readPrefix(submission.storage_path, EVALUATION_EVIDENCE_BYTES)
   if (!evidence) throw new ApiError("UPLOAD_NOT_FOUND", "The evidence file for this submission couldn't be found.")
 
+  step("evidence read; creating running evaluation")
   let running: EvaluationData
   try {
     running = await deps.db.createRunningEvaluation({
@@ -104,6 +110,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
     throw e
   }
 
+  step("running evaluator")
   try {
     const out = await deps.evaluator.evaluate({
       invoiceId: invoice.id,
@@ -119,6 +126,7 @@ export async function evaluateSubmission(deps: BackendDeps, input: { userId: str
       },
       evidence,
     })
+    step(`evaluator returned (model ${out.model}); saving`)
     validateOutput(out, criteria)
     // A development evaluator can never produce a result that looks real.
     if (deps.evaluator.mode === "demo" && !out.simulated) throw new Error("demo evaluator returned a non-simulated result")

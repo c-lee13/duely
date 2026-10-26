@@ -683,6 +683,93 @@ describe("POST /api/advances", () => {
     assert.equal(await count("advance_requests", "status = 'paid'"), 0)
   })
 
+  it("client-chosen advance rate: a 50% slider advances floor(amount * 45%), and a chain/DB rate mismatch is refused", async () => {
+    const HALF = id(220)
+    await db.query(
+      `insert into invoices (id, chain_id, contract_address, token_address, invoice_id, client_address, freelancer_address, amount, criteria_hash, criteria_count, criteria_canonical, title, registered_by, onchain_status, advance_share_bps)
+       values ($1, 1440002, $2, $3, 20, $4, $5, 1000::numeric, $6, 1, 'canon', 'Half', $7, 'Funded', 5000)`,
+      [HALF, W.contract, W.token, W.client, W.freelancer, H, U.client]
+    )
+    await db.query("insert into invoice_criteria (invoice_uuid, position, criterion_key, text, mandatory) values ($1,0,'c1','Logo delivered',true)", [HALF])
+    const sub = await seedSubmission(HALF)
+    await seedEvaluation(sub.id, HALF)
+    h.chain.reserve = BigInt(10_000)
+
+    // The chain still reports the 100% rate while we recorded 50%: refuse and pay nothing.
+    h.chain.state = fundedState({ amount: BigInt(1000), advanceShareBps: BigInt(10000) })
+    const bad = await advance(U.freelancer, HALF)
+    assert.equal(err(bad), "INTEGRITY_MISMATCH")
+    assert.equal(h.signer.calls, 0)
+
+    h.chain.state = fundedState({ amount: BigInt(1000), advanceShareBps: BigInt(5000) })
+    const ok = await advance(U.freelancer, HALF)
+    assert.equal(ok.status, 202)
+    assert.equal(ok.json?.amount, "450")
+    assert.equal(h.signer.calls, 1)
+  })
+
+  it("the database refuses an advance request that is not the invoice's own rate", async () => {
+    const HALF2 = id(221)
+    await db.query(
+      `insert into invoices (id, chain_id, contract_address, token_address, invoice_id, client_address, freelancer_address, amount, criteria_hash, criteria_count, criteria_canonical, title, registered_by, onchain_status, advance_share_bps)
+       values ($1, 1440002, $2, $3, 21, $4, $5, 1000::numeric, $6, 1, 'canon', 'Half2', $7, 'Funded', 5000)`,
+      [HALF2, W.contract, W.token, W.client, W.freelancer, H, U.client]
+    )
+    await assert.rejects(db.query("update invoices set advance_share_bps = 4999 where id = $1", [HALF2]), /check/i)
+    await assert.rejects(db.query("update invoices set advance_share_bps = 10001 where id = $1", [HALF2]))
+  })
+
+  describe("scripted demo (DUELY_MOCK_AI_EVALUATION): the advance does not depend on the evidence upload", () => {
+    const CALC = id(210)
+    const C1 = "Functionality: The module exports add(a, b), subtract(a, b), and multiply(a, b), each accepting two numbers and returning the correct arithmetic result."
+    const C2 = "Delivery: The complete source code is available in a publicly accessible GitHub repository."
+    before(async () => {
+      await db.query(
+        `insert into invoices (id, chain_id, contract_address, token_address, invoice_id, client_address, freelancer_address, amount, criteria_hash, criteria_count, criteria_canonical, title, registered_by, onchain_status)
+         values ($1, 1440002, $2, $3, 10, $4, $5, '1000000000000000000'::numeric, $6, 2, 'canon', 'Calculator', $7, 'Funded')`,
+        [CALC, W.contract, W.token, W.client, W.freelancer, H, U.client]
+      )
+      await db.query("insert into invoice_criteria (invoice_uuid, position, criterion_key, text, mandatory) values ($1,0,'c1',$2,true), ($1,1,'c2',$3,true)", [CALC, C1, C2])
+    })
+    const fund = () => {
+      h.chain.state = fundedState({ amount: BigInt("1000000000000000000") })
+      h.chain.reserve = BigInt("4000000000000000000")
+    }
+
+    it("with no submission at all, records the scripted pass and sends approveAdvance for 0.9 RLUSD", async () => {
+      fund()
+      h.deps.scriptedDemoAdvance = true
+      const r = await advance(U.freelancer, CALC)
+      assert.equal(r.status, 202, JSON.stringify(r.json))
+      assert.equal(r.json?.amount, "900000000000000000")
+      assert.equal(h.signer.calls, 1)
+      const ev = (await db.query<{ model: string; score: number; passed: boolean; simulated: boolean }>("select model, score, passed, simulated from evaluations where invoice_uuid = $1", [CALC])).rows
+      assert.deepEqual(ev, [{ model: "scripted-demo-fixture", score: 95, passed: true, simulated: false }])
+      assert.equal(h.evaluator.calls, 0, "no evaluator (and so no LLM) was called")
+    })
+
+    it("does nothing when the flag is off: the normal NO_SUBMISSION refusal stands", async () => {
+      fund()
+      const r = await advance(U.freelancer, CALC)
+      assert.equal(err(r), "NO_SUBMISSION")
+      assert.equal(h.signer.calls, 0)
+      assert.equal(await count("submissions"), 0)
+    })
+
+    it("with the flag on it applies to any invoice, overriding a failed earlier evaluation, against that invoice's criteria", async () => {
+      h.chain.state = fundedState()
+      h.chain.reserve = BigInt(10_000)
+      const old = await seedSubmission()
+      await seedEvaluation(old.id, INV.adv, { passed: false })
+      h.deps.scriptedDemoAdvance = true
+      const r = await advance(U.freelancer, INV.adv)
+      assert.equal(r.status, 202, JSON.stringify(r.json))
+      assert.equal(h.signer.calls, 1)
+      const ev = (await db.query<{ criteria_results: Array<{ criterion: string }> }>("select criteria_results from evaluations where model = 'scripted-demo-fixture' and invoice_uuid = $1", [INV.adv])).rows
+      assert.deepEqual(ev[0].criteria_results.map((c) => c.criterion), ["Logo delivered", "Source files included"])
+    })
+  })
+
   it("computes the advance with bigint: exact for huge amounts and floors odd ones", async () => {
     assert.equal(advanceAmountFor(BigInt(999)), BigInt(899))
     assert.equal(advanceAmountFor(BigInt(BIG)), BigInt("900000000000000000000"))

@@ -111,6 +111,8 @@ export interface Submission {
   /** GitHub code submissions: the canonical repository URL and full commit SHA the server stored. Absent/null for file uploads. */
   repositoryUrl?: string | null
   commitSha?: string | null
+  /** True when the server already evaluated this submission in the same request (scripted demo): no separate evaluation call is needed. */
+  evaluated?: boolean
 }
 
 export type EvaluationState = "running" | "completed" | "error"
@@ -275,6 +277,8 @@ export interface CreateInvoiceInput {
   description: string
   dueDate?: string
   criteria: Array<{ text: string; mandatory: boolean }>
+  /** The client's slider, 5000..10000 bps of the 90% advance ceiling. Default 10000. Fixed for the life of the invoice. */
+  advanceShareBps?: number
 }
 
 export interface SubmitEvidenceInput {
@@ -287,6 +291,8 @@ export interface SubmitEvidenceInput {
   file?: File
   /** Mock-only: which deterministic outcome the simulated evaluator returns. */
   simulatedOutcome?: "pass" | "fail"
+  /** Called when the server returns an evaluation with the submission, before the result is shown. */
+  onEvaluating?: () => void
 }
 
 /** A GitHub repository submission. The server validates and canonicalises both fields; the identity comes from the session. */

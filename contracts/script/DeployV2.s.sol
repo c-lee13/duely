@@ -42,7 +42,7 @@ abstract contract DeployV2Base is Script {
     address internal constant V1_MOCK_USDC = 0x5ff7b6ae08c37868303e7A815308Af476421506c;
 
     // Finalized financial parameters (docs/VAULT_IMPLEMENTATION_SPEC.md).
-    uint256 internal constant FEE_BPS = 300;
+    uint256 internal constant FEE_BPS = 1_000;
     uint256 internal constant ADVANCE_BPS = 9000;
     uint256 internal constant MAX_UTILIZATION_BPS = 8000;
     uint256 internal constant MAX_EXPOSURE_BPS = 2500;
@@ -238,7 +238,7 @@ abstract contract DeployV2Base is Script {
                 "vault: deployer holds operator/pauser"
             );
         }
-        require(v.FEE_BPS() == FEE_BPS, "vault FEE_BPS != 300");
+        require(v.FEE_BPS() == FEE_BPS, "vault FEE_BPS != 1000");
         require(v.MAX_ADVANCE_BPS() == ADVANCE_BPS, "vault advance cap != 90%");
         require(v.MAX_UTILIZATION_BPS() == MAX_UTILIZATION_BPS, "vault utilization cap != 80%");
         require(v.MAX_INVOICE_EXPOSURE_BPS() == MAX_EXPOSURE_BPS, "vault exposure cap != 25%");
@@ -250,7 +250,7 @@ abstract contract DeployV2Base is Script {
     function _verifyEscrow(InvoiceAdvanceV2 e, Cfg memory c, address vault_) internal view {
         require(address(e.paymentToken()) == c.token, "escrow token != RLUSD");
         require(address(e.vault()) == vault_, "escrow vault != VAULT_ADDRESS");
-        require(e.FEE_BPS() == FEE_BPS, "escrow FEE_BPS != 300");
+        require(e.FEE_BPS() == FEE_BPS, "escrow FEE_BPS != 1000");
         require(e.ADVANCE_BPS() == ADVANCE_BPS, "escrow ADVANCE_BPS != 9000");
         require(e.hasRole(e.DEFAULT_ADMIN_ROLE(), c.admin), "escrow: admin role missing");
         require(e.hasRole(e.OPERATOR_ROLE(), c.operator), "escrow: operator role missing");

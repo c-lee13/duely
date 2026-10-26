@@ -29,6 +29,7 @@ export interface ApiInvoiceRecord {
   freelancer: Address
   amount: string
   advanceAmount: string
+  advanceShareBps: number
   criteriaHash: `0x${string}`
   onchainStatus: OnchainInvoiceStatus
   submissionStatus: SubmissionStatus
@@ -122,6 +123,7 @@ export function toInvoiceDetail(
     freelancer: v.freelancer,
     amount: v.amount,
     advanceAmount: v.advanceAmount,
+    advanceShareBps: v.advanceShareBps,
     criteriaHash: v.criteriaHash,
     onchainStatus: v.onchainStatus,
     submissionStatus: v.submissionStatus,
@@ -237,7 +239,7 @@ export function buildTimeline(detail: ApiInvoiceDetail): TimelineEvent[] {
       at: e.evaluatedAt ?? inv.createdAt,
       kind: "evaluated",
       layer: "offchain",
-      title: e.simulated ? "Simulated evaluation" : "AI evaluation",
+      title: e.simulated ? "Simulated evaluation" : e.model === "scripted-demo-fixture" ? "Scripted demo evaluation" : "AI evaluation",
       description: `Score ${e.score ?? 0}/100, ${e.passed ? "recommended pass" : "recommended not to pass"}. A recommendation, not a payment decision.`,
       simulated: e.simulated,
     })

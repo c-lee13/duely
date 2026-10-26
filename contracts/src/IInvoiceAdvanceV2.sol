@@ -22,7 +22,8 @@ interface IInvoiceAdvanceV2 {
         address client;
         uint256 amount;
         uint256 advanceAmount; // principal advanced by the vault, 0 before advance
-        uint256 advanceFee; // 300 bps of `amount`, stored at advance time, 0 before advance
+        uint256 advanceFee; // 1000 bps of `amount`, stored at advance time, 0 before advance
+        uint256 advanceShareBps; // client-chosen slider 5000..10000 (share of the 90% ceiling)
         bytes32 metadataHash;
         bytes32 evaluationHash;
         InvoiceStatus status;
@@ -33,7 +34,8 @@ interface IInvoiceAdvanceV2 {
         address indexed freelancer,
         address indexed client,
         uint256 amount,
-        bytes32 metadataHash
+        bytes32 metadataHash,
+        uint256 advanceShareBps
     );
     event InvoiceFunded(uint256 indexed invoiceId, address indexed client, uint256 amount);
     event InvoiceCancelled(uint256 indexed invoiceId);
@@ -63,6 +65,7 @@ interface IInvoiceAdvanceV2 {
     error InvalidAddress();
     error InvalidAmount();
     error InvalidHash();
+    error InvalidAdvanceShare();
     error InvalidInvoiceParties();
     error InvalidStatus(uint256 invoiceId, InvoiceStatus actual);
     error NotInvoiceClient(uint256 invoiceId);
@@ -71,7 +74,7 @@ interface IInvoiceAdvanceV2 {
     error VaultMismatch();
     error NothingToClaim(address recipient);
 
-    function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash)
+    function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash, uint256 advanceShareBps)
         external
         returns (uint256 invoiceId);
     function cancelInvoice(uint256 invoiceId) external;
@@ -87,7 +90,7 @@ interface IInvoiceAdvanceV2 {
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory);
     function claimable(address recipient) external view returns (uint256);
     function totalClaimable() external view returns (uint256);
-    function quoteAdvance(uint256 amount)
+    function quoteAdvance(uint256 amount, uint256 advanceShareBps)
         external
         pure
         returns (uint256 advance, uint256 fee, uint256 vaultRepayment, uint256 freelancerRemainder);
@@ -96,5 +99,6 @@ interface IInvoiceAdvanceV2 {
     function totalEscrow() external view returns (uint256);
     function nextInvoiceId() external view returns (uint256);
     function ADVANCE_BPS() external view returns (uint256);
+    function MIN_ADVANCE_SHARE_BPS() external view returns (uint256);
     function FEE_BPS() external view returns (uint256);
 }

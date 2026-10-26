@@ -192,6 +192,9 @@ const defaultStorage = (): ApiRepositoryDeps["storage"] => {
   }
 }
 
+/** How long "Evaluating submission…" shows for a scripted evaluation (cosmetic; the result is already saved). */
+const SCRIPTED_EVALUATION_DISPLAY_MS = 3000
+
 export class ApiDuelyRepository implements DuelyRepository {
   readonly mode = "api" as const
 
@@ -468,9 +471,23 @@ export class ApiDuelyRepository implements DuelyRepository {
     if (!input.file) throw new DomainError("INVALID_INPUT", "Choose a file to upload.")
     const invoiceUuid = await this.uuidFor(input.invoiceId)
     try {
+      const startedAt = Date.now()
       const r = await this.upload({ invoiceId: invoiceUuid, file: input.file, note: input.note })
+      const evaluated = r.evaluation !== undefined && r.evaluation !== null
+      // Only when a caller is showing "Evaluating submission…"; the instant demo path passes no onEvaluating and doesn't wait.
+      if (evaluated && input.onEvaluating) {
+        // The scripted evaluation is already saved server-side. Keep "Evaluating submission…" up until the display minimum has
+        // passed counted from the click (not from the end of the upload), so the real work and the animation overlap.
+        input.onEvaluating?.()
+        console.info("[submit-evidence] scripted evaluation already saved server-side; showing 'Evaluating submission…'")
+        const remaining = SCRIPTED_EVALUATION_DISPLAY_MS - (Date.now() - startedAt)
+        if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining))
+      }
+      console.info(`[submit-evidence] refreshing invoice data once (+${Date.now() - startedAt}ms total from click)`)
+      this.bundles.clear()
       this.emit()
       return {
+        evaluated,
         submissionId: r.submissionId,
         invoiceId: input.invoiceId,
         fileName: r.fileName,
@@ -585,13 +602,18 @@ export class ApiDuelyRepository implements DuelyRepository {
     // Ids are positional and the encoding is the shared one the server verifies, so the on-chain commitment always matches.
     const criteria = input.criteria.map((c, i) => ({ id: `c${i + 1}`, text: c.text.trim(), mandatory: c.mandatory }))
     const metadataHash = computeMetadataHash(criteria)
+    // The advance rate is committed on-chain (V2) and read back from the chain at registration; V1 ignores it.
+    const advanceShareBps = BigInt(input.advanceShareBps ?? 10000)
+    if (advanceShareBps < BigInt(5000) || advanceShareBps > BigInt(10000)) {
+      throw new DomainError("INVALID_INPUT", "The advance rate must be between 50% and 100%.")
+    }
     const registration = { title: input.title, description: input.description, dueDate: input.dueDate ?? null, criteria }
     const confirmed = await this.tx(ctx, {
       label: "Create invoice",
       action: "createInvoice",
       meta: { registration },
       onProgress,
-      submit: () => sdkCreateInvoice({ freelancer: input.freelancer, amount: BigInt(input.amount), metadataHash }, ctx),
+      submit: () => sdkCreateInvoice({ freelancer: input.freelancer, amount: BigInt(input.amount), metadataHash, advanceShareBps }, ctx),
     })
     if (!confirmed.invoiceId) throw new DomainError("TX_FAILED", "The transaction confirmed but carried no invoice id; check it on the explorer.")
     // Remember the id so a reload can finish registration even if the next step fails.

@@ -315,6 +315,46 @@ describe("file and text submissions are preserved", () => {
   })
 })
 
+describe("scripted-demo auto-evaluation inside POST /api/submissions", () => {
+  const postWith = async (autoEvaluate: (u: string | null, id: string) => Promise<unknown | null>, body: unknown) => {
+    const res = await handleSubmissionPost(
+      new Request("http://localhost:3000/api/submissions", { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost:3000" }, body: JSON.stringify(body) }),
+      { userId: async () => U.freelancer, deps: () => evDeps, autoEvaluate }
+    )
+    return { status: res.status, json: (await res.json()) as Record<string, unknown> }
+  }
+  const filePath = (n: number) => {
+    const path = buildEvidencePath({ invoiceId: INV, userId: U.freelancer, objectId: id(n), ext: "txt" })
+    store.putRaw(path, new TextEncoder().encode(TEXT_EVIDENCE), "text/plain")
+    return path
+  }
+
+  it("saves the submission and returns the persisted evaluation in the same response, in one call", async () => {
+    const r = await postWith(
+      async (userId, submissionId) => (await http(handleEvaluate, ctx(userId, deps), { body: { submissionId } })).json,
+      { invoiceId: INV, storagePath: filePath(9300), fileName: "proof.txt" }
+    )
+    assert.equal(r.status, 201, JSON.stringify(r.json))
+    const ev = r.json.evaluation as { submissionId: string; evaluationId: string }
+    assert.equal(ev.submissionId, r.json.submissionId)
+    assert.equal(await count("evaluations", "state = 'completed'"), 1) // persisted, so /api/advances can rely on it
+  })
+
+  it("never fails the submission when the evaluation can't be produced", async () => {
+    const r = await postWith(async () => { throw new Error("boom") }, { invoiceId: INV, storagePath: filePath(9301), fileName: "proof.txt" })
+    assert.equal(r.status, 201)
+    assert.equal(r.json.evaluation, undefined)
+    assert.equal(await count("submissions"), 1)
+  })
+
+  it("is not used for GitHub submissions", async () => {
+    let called = 0
+    const r = await postWith(async () => (called++, {}), githubBody())
+    assert.equal(r.status, 201, JSON.stringify(r.json))
+    assert.equal(called, 0)
+  })
+})
+
 describe("authentication, ownership and invoice state come before any GitHub call", () => {
   const nothingHappened = async () => {
     assert.equal(validatorCalls.length, 0)

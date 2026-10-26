@@ -55,7 +55,7 @@ contract DuelyVaultWithdrawalCapTest is Test {
 
     function _advanced(uint256 amount) internal returns (uint256 id) {
         vm.prank(client);
-        id = escrow.createInvoice(freelancer, amount, META);
+        id = escrow.createInvoice(freelancer, amount, META, 10_000);
         vm.prank(client);
         escrow.fundInvoice(id);
         vm.prank(evaluator);

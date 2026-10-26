@@ -505,7 +505,7 @@ export class MockDuelyRepository implements DuelyRepository {
       at,
       kind: "advance_requested",
       layer: "offchain",
-      title: "Freelancer requested a 90% advance",
+      title: "Freelancer requested an advance",
       description: "Eligibility checks passed. The platform signer is submitting the advance.",
       amount: eligibility.amount,
     })

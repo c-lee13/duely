@@ -141,7 +141,7 @@ describe("terms validation", () => {
   bad("amounts can't be fractional", terms({ milestones: [{ ...terms().milestones[0], amount: "700.5" }, terms().milestones[1]] }), /needs a positive amount/)
   bad("amounts can't be zero", terms({ milestones: [{ ...terms().milestones[0], amount: "0" }, terms().milestones[1]] }), /needs a positive amount/)
   bad("amounts can't exceed uint256", terms({ payment: { ...terms().payment, totalAmount: "1" + "0".repeat(78) } }), /positive whole number/)
-  bad("the early advance is fixed by platform policy", terms({ payment: { ...terms().payment, earlyAdvance: { enabled: true, percent: 80 as never } } }), new RegExp(`fixed at ${EARLY_ADVANCE_PERCENT}%`))
+  bad("the early advance is fixed by platform policy", terms({ payment: { ...terms().payment, earlyAdvance: { enabled: true, percent: 80 as never } } }), new RegExp(`ceiling of ${EARLY_ADVANCE_PERCENT}%`))
   bad("escrow must cover the full amount up front", terms({ payment: { ...terms().payment, escrow: { fullAmountUpfront: false as never } } }), /escrowed in full|escrowed up front/)
   bad("the token needs a valid address, symbol and decimals", terms({ payment: { ...terms().payment, token: { address: "nope" as never, symbol: "", decimals: 99 } } }), /token must be a valid address/)
 

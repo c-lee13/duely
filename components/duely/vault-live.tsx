@@ -15,7 +15,7 @@ import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import { WalletStatusBar } from "@/components/duely/wallet-status"
 import { useAction, useRepoQuery, useRepository } from "@/hooks/use-duely"
 import type { VaultOverview } from "@/lib/frontend/domain"
-import { formatToken, parseTokenInput, tokenDisplay, tokens } from "@/lib/frontend/token"
+import { formatToken, parseTokenInput, tokenDisplay } from "@/lib/frontend/token"
 
 /**
  * The live DuelyVault page (v2 deployment, API mode). Every figure is read from the chain at one block; nothing is
@@ -90,7 +90,8 @@ export function VaultLive() {
 
 function VaultStatus({ v }: { v: VaultOverview }) {
   const empty = BigInt(v.totalAssets) === BigInt(0)
-  const example = BigInt(900)
+  // The largest advance a 1 RLUSD demo invoice can draw (0.90, at a 100% advance rate). Fractions are exact base units (18 decimals), never floats.
+  const example = BigInt(parseTokenInput("0.9") ?? "0")
   return (
     <div className="space-y-3">
       {v.paused && (
@@ -116,7 +117,7 @@ function VaultStatus({ v }: { v: VaultOverview }) {
       )}
       {!empty && (
         <p className="text-xs text-muted-foreground">
-          Limits: one advance can use at most {pct(v.maxInvoiceExposureBps)} of the vault&apos;s NAV, and outstanding advances can&apos;t exceed {pct(v.maxUtilizationBps)} of it. For example, a {formatToken(tokens(example))} advance needs at least {formatToken(tokens(example * BigInt(4)))} of NAV.
+          Limits: one advance can use at most {pct(v.maxInvoiceExposureBps)} of the vault&apos;s NAV, and outstanding advances can&apos;t exceed {pct(v.maxUtilizationBps)} of it. For example, a {formatToken(example.toString())} advance needs at least {formatToken((example * BigInt(4)).toString())} of NAV.
         </p>
       )}
     </div>

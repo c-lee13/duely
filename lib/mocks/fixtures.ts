@@ -98,9 +98,9 @@ function requestAndPayAdvance(s: MockState, invoiceId: string, when: string) {
     at: when,
     kind: "advance_requested",
     layer: "offchain",
-    title: "Freelancer requested a 90% advance",
+    title: "Freelancer requested an advance",
     description: "Explicit request after a passing evaluation. The platform checked eligibility before signing.",
-    amount: advanceFor(invoice.amount),
+    amount: advanceFor(invoice.amount, invoice.advanceShareBps),
   })
   approveAdvance(s, P, invoiceId, { at: when })
   const tx = s.transactions[s.transactions.length - 1]
@@ -108,7 +108,7 @@ function requestAndPayAdvance(s: MockState, invoiceId: string, when: string) {
     requestId,
     invoiceId,
     status: "paid",
-    amount: advanceFor(invoice.amount),
+    amount: advanceFor(invoice.amount, invoice.advanceShareBps),
     createdAt: when,
     transactionId: tx.id,
   })

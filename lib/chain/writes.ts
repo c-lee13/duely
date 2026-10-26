@@ -15,7 +15,7 @@ import {
   type WalletClient,
 } from "viem"
 
-import { MAX_UINT256 } from "./amounts"
+import { MAX_ADVANCE_SHARE_BPS, MAX_UINT256, assertAdvanceShareBps } from "./amounts"
 import { getPublicClient } from "./client"
 import {
   CHAIN_ID,
@@ -628,9 +628,11 @@ export interface CreateInvoiceInput {
   amount: bigint
   /** 32-byte hash of the canonical invoice terms (see CLAUDE.md hashing rule). Non-zero. */
   metadataHash: string
+  /** V2 only: the client's slider, 5000..10000 bps of the 90% ceiling. Defaults to 10000 (V1 ignores it). */
+  advanceShareBps?: bigint
 }
 
-/** `createInvoice(freelancer, amount, metadataHash)`; signer becomes the invoice client. */
+/** `createInvoice(freelancer, amount, metadataHash[, advanceShareBps])`; signer becomes the invoice client. */
 export async function createInvoice(
   input: CreateInvoiceInput,
   ctx: WriteContext
@@ -648,19 +650,25 @@ export async function createInvoice(
   if (ctx.wallet.account?.address.toLowerCase() === freelancer.toLowerCase()) {
     throw invalid("freelancer must differ from the client (the signing wallet)")
   }
+  // V2 takes the client's slider as a fourth argument and echoes it in InvoiceCreated; V1 has neither.
+  const v2 = isV2()
+  const advanceShareBps = input.advanceShareBps ?? MAX_ADVANCE_SHARE_BPS
+  if (v2) assertAdvanceShareBps(advanceShareBps)
   return submit(
     ctx,
     invoiceAdvanceCall(
       "createInvoice",
-      [freelancer, amount, metadataHash],
+      v2 ? [freelancer, amount, metadataHash, advanceShareBps] : [freelancer, amount, metadataHash],
       "createInvoice",
-      (account) =>
-        expectedFor("createInvoice", {
+      (account) => {
+        const expected = expectedFor("createInvoice", {
           client: account,
           freelancer,
           amount,
           metadataHash,
         })
+        return v2 ? { ...expected, args: { ...expected.args, advanceShareBps } } : expected
+      }
     )
   )
 }

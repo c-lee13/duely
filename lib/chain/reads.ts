@@ -62,6 +62,8 @@ export interface InvoiceDetails {
   advanceAmount: bigint
   /** v2 only: the fee fixed when the advance was funded (base units). Absent on v1. */
   advanceFee?: bigint
+  /** v2 only: the client's slider, 5000..10000 bps of the 90% advance ceiling. Absent on v1. */
+  advanceShareBps?: bigint
   metadataHash: Hex
   /** Zero hash until an advance is paid. */
   evaluationHash: Hex
@@ -174,7 +176,7 @@ export async function getInvoice(
   opts?: ReadOptions
 ): Promise<InvoiceDetails> {
   const id = parseInvoiceId(invoiceId)
-  // V2's Invoice struct has 8 fields (adds advanceFee), so it must be decoded with its own ABI.
+  // V2's Invoice struct has 9 fields (adds advanceFee and advanceShareBps), so it must be decoded with its own ABI.
   if (getActiveDeployment().protocol === "v2") {
     const v2 = await guarded(`getInvoice(${id})`, () =>
       readerOf(opts).readContract({
@@ -192,6 +194,7 @@ export async function getInvoice(
       amount: v2.amount,
       advanceAmount: v2.advanceAmount,
       advanceFee: v2.advanceFee,
+      advanceShareBps: v2.advanceShareBps,
       metadataHash: v2.metadataHash,
       evaluationHash: v2.evaluationHash,
       status: v2.status,

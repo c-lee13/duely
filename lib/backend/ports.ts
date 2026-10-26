@@ -44,6 +44,8 @@ export interface ChainInvoiceCreation {
   freelancer: Address
   amount: bigint
   criteriaHash: Bytes32
+  /** The client's slider as committed in InvoiceCreated (V2); absent for V1 deployments, which always advance the 90% ceiling. */
+  advanceShareBps?: bigint
   blockNumber: bigint
 }
 
@@ -66,6 +68,8 @@ export interface ChainInvoiceState {
   criteriaHash?: Bytes32
   /** Non-zero once an advance was paid. */
   evaluationHash?: Bytes32
+  /** The client's slider (5000..10000 bps of the 90% ceiling). Absent = 10000 (V1). */
+  advanceShareBps?: bigint
 }
 
 /** Everything needed to look up (or rebuild after a restart) one broadcast `approveAdvance`. */
@@ -282,6 +286,8 @@ export interface InvoiceData {
   /** CACHE of chain state. Never proof of anything. */
   onchain_status: OnchainInvoiceStatus
   advance_amount: string
+  /** Client-chosen slider mirrored from the chain: 5000..10000 bps of the 90% ceiling. */
+  advance_share_bps: number
   chain_synced_at: string | null
   created_at: string
 }
@@ -382,6 +388,8 @@ export interface RegisterInvoiceArgs {
   userId: string
   status: OnchainInvoiceStatus
   blockNumber: number | null
+  /** Slider read from the chain's InvoiceCreated event (5000..10000). */
+  advanceShareBps: number
 }
 
 export interface BackendDb {
@@ -398,6 +406,8 @@ export interface BackendDb {
   getCriteria(invoiceId: string): Promise<CriterionData[]>
   listSubmissions(invoiceId: string): Promise<SubmissionData[]> // newest first
   getSubmission(id: string): Promise<SubmissionData | null>
+  /** Scripted demo only: records a submission row for the calculator fixture without a stored file. */
+  insertScriptedDemoSubmission?(row: { invoice_uuid: string; freelancer_user_id: string; freelancer_address: Address; storage_path: string; file_name: string; file_size: number; mime_type: string; note: string }): Promise<SubmissionData>
   listEvaluations(invoiceId: string): Promise<EvaluationData[]> // newest first
   /** The live (running or completed) evaluation of a submission, if any. */
   findLiveEvaluation(submissionId: string): Promise<EvaluationData | null>
@@ -496,4 +506,6 @@ export interface BackendDeps {
   signer: AdvanceSigner
   evaluator: Evaluator
   newId?: () => string
+  /** DUELY_MOCK_AI_EVALUATION=true: an advance request on the calculator fixture invoice records its own scripted evaluation. */
+  scriptedDemoAdvance?: boolean
 }

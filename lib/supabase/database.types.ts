@@ -77,6 +77,8 @@ export type InvoiceRow = {
   /** CACHE of chain state; not authoritative. */
   onchain_status: OnchainStatusDb
   advance_amount: string
+  /** Client-chosen slider mirrored from the chain: 5000..10000 bps of the 90% advance ceiling. */
+  advance_share_bps: number
   chain_synced_at: string | null
   chain_synced_block: number | null
   created_at: string

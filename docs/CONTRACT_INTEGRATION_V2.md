@@ -4,6 +4,10 @@
 passing, pinned to block 9,234,931). V2 is **additive**: the V1 contracts, manifests, ABIs, SDK and environment
 variables are untouched, and nothing here requires an immediate migration.
 
+> **Redeployed with the client-chosen advance rate.** The addresses below are the second V2 deployment (per-invoice `advanceShareBps` 5000..10000 of
+> the 90% ceiling, fixed 10% fee; see the amendment in `docs/VAULT_IMPLEMENTATION_SPEC.md`). The first deployment (fixed 90% / 3%) is abandoned and
+> its broadcast records are archived under `contracts/broadcast/archive/`. `createInvoice` and `quoteAdvance` take the extra argument, and `Invoice` has 9 fields.
+
 Sources of truth, in this order: the compiled ABIs (`contracts/deployments/abi/*.json`, also typed in
 `lib/chain/generated/`), the deployment manifest (`contracts/deployments/xrpl-evm-testnet-v2.json`), then this
 guide. Where this guide and the chain disagree, the chain wins; run the verifier to see which.
@@ -20,8 +24,8 @@ The pooled-vault design and its risk review are in `docs/VAULT_IMPLEMENTATION_SP
 | Network / chain id | XRPL EVM Testnet / **1449000** |
 | Explorer | https://explorer.testnet.xrplevm.org |
 | RLUSD (payment token, 18 decimals, issuer token, **not** a demo token) | `0x27b57a9D0b8d24EB97259c4E2279e45255e016f3` |
-| **DuelyVault** (ERC-4626, shares `dvRLUSD`, 24 decimals) | `0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8` |
-| **InvoiceAdvanceV2** (escrow) | `0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96` |
+| **DuelyVault** (ERC-4626, shares `dvRLUSD`, 24 decimals) | `0xCb031203549809DE05c4e9fa097d881d375094b8` |
+| **InvoiceAdvanceV2** (escrow) | `0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302` |
 | Vault deploy tx / block | `0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70` / 9,234,793 |
 | Escrow deploy tx / block | `0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5` / 9,234,835 |
 | Link tx (`setEscrow`) / block | `0xc5331536ed041b595e8674ea1ffa22a5d5c5653497956caa8f6cc512ffc5b6a5` / 9,234,849 |
@@ -39,13 +43,13 @@ invoice; vault utilization cap **80%** of NAV; per-invoice exposure cap **25%** 
 
 ```bash
 # Next.js / the app (public; safe for the browser)
-NEXT_PUBLIC_V2_VAULT_ADDRESS=0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8
-NEXT_PUBLIC_V2_ESCROW_ADDRESS=0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96
+NEXT_PUBLIC_V2_VAULT_ADDRESS=0xCb031203549809DE05c4e9fa097d881d375094b8
+NEXT_PUBLIC_V2_ESCROW_ADDRESS=0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302
 NEXT_PUBLIC_V2_TOKEN_ADDRESS=0x27b57a9D0b8d24EB97259c4E2279e45255e016f3
 NEXT_PUBLIC_V2_DEPLOY_BLOCK=9234793
 # Foundry (script/DeployV2.s.sol); the same two addresses, read by a different tool
-VAULT_ADDRESS=0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8
-ESCROW_ADDRESS=0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96
+VAULT_ADDRESS=0xCb031203549809DE05c4e9fa097d881d375094b8
+ESCROW_ADDRESS=0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302
 ```
 
 Which file is read: Next.js uses `.env.local` over `.env`; Foundry and `npm run chain:*` read `.env` only. Keep the two files
@@ -205,6 +209,8 @@ RLUSD blocks `approve` while the issuer has it paused.
    evaluation's hash (non-zero). The **vault pays the freelancer directly**; the client's escrow is untouched.
 5. Show `paid` only after the receipt succeeded **and** the `AdvanceFunded` + `AdvancePaid` events were observed.
    `AdvancePaid.amount` is the advance (principal), and `AdvancePaid.fee` the fixed fee.
+
+**Hackathon demo size (1 RLUSD).** Client invoice 1.00 RLUSD (`1e18`); LP deposits 4.00 RLUSD. Advance 0.90 (`0.9e18`, ≤ 25% × 4.00 = 1.00 and ≤ 80% × 4.00 = 3.20), fee 0.03, vault repaid 0.93 at approval, freelancer claims the remaining 0.07. No limit is changed; 4.00 is the smallest round deposit that satisfies the 25% rule (minimum NAV 3.60).
 
 Liquidity sizing: a 900 advance needs NAV ≥ 3,600 RLUSD (25% exposure rule) and 900 in cash. With smaller vault
 funding, use smaller invoices (advance ≤ 25% of NAV). The vault starts **empty**: until LPs deposit,
@@ -423,8 +429,8 @@ These are not defects; they are places where a plain reading of the brief would 
 cd contracts
 python3 -I script/verify_v2.py                              # 73 read-only checks pinned to one block
 node script/export-abi-v2.mjs --check                      # ABIs, typed constants and manifest are current
-cast call 0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8 "escrow()(address)" --rpc-url xrpl_evm_testnet
-cast call 0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96 "quoteAdvance(uint256)(uint256,uint256,uint256,uint256)" 1000000000000000000000 --rpc-url xrpl_evm_testnet
+cast call 0xCb031203549809DE05c4e9fa097d881d375094b8 "escrow()(address)" --rpc-url xrpl_evm_testnet
+cast call 0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302 "quoteAdvance(uint256)(uint256,uint256,uint256,uint256)" 1000000000000000000000 --rpc-url xrpl_evm_testnet
 # expected quote for 1,000 RLUSD: 900e18, 30e18, 930e18, 70e18
 ```
 

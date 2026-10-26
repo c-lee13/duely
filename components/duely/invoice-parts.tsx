@@ -23,8 +23,9 @@ import type {
   TimelineEvent,
   TransactionRecord,
 } from "@/lib/frontend/domain"
+import { PASS_SCORE_THRESHOLD } from "@/lib/frontend/eligibility"
 import { shortHash } from "@/lib/frontend/criteria-digest"
-import { advanceFor, formatToken, isZero, sub, sum, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { advanceFor, advancePercentOfInvoice, formatToken, isZero, sub, sum, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
 import { advanceFeeFor, fundingCopy, v2Active } from "@/lib/frontend/protocol-copy"
 import { tryExplorerTxUrl } from "@/lib/chain/config"
 import { useSession } from "@/hooks/use-duely"
@@ -35,7 +36,7 @@ const TX_LABEL: Record<TransactionRecord["action"], string> = {
   createInvoice: "Create invoice",
   fundInvoice: "Fund escrow",
   depositReserve: "Deposit to reserve",
-  approveAdvance: "Pay 90% advance",
+  approveAdvance: "Pay advance",
   approveCompletion: "Approve & settle",
   raiseDispute: "Open dispute",
   cancelInvoice: "Cancel invoice",
@@ -86,7 +87,8 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   if (invoice.financialStatusVerified === false) return <UnverifiedMoneyNotice title="Payment breakdown" invoice={invoice} />
   const status = invoice.onchainStatus
   const hasAdvance = !isZero(invoice.advanceAmount)
-  const advance = hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount)
+  const advance = hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount, invoice.advanceShareBps)
+  const pct = advancePercentOfInvoice(invoice.advanceShareBps)
   const fc = fundingCopy()
   const pull = fc.pull
   const fee = hasAdvance ? advanceFeeFor(invoice.amount) : "0"
@@ -106,11 +108,11 @@ export function PaymentFlow({ invoice, transactions }: { invoice: InvoiceDetail;
   steps.push({
     title: pull ? "Advance from the liquidity vault" : "Advance from platform reserve",
     detail: hasAdvance ? (
-      <><Amount value={invoice.advanceAmount} /> (90%) paid to the freelancer from the {fc.short}.</>
+      <><Amount value={invoice.advanceAmount} /> ({pct} of the invoice) paid to the freelancer from the {fc.short}.</>
     ) : status === "Settled" || status === "Disputed" ? (
       <>No advance was taken on this invoice.</>
     ) : (
-      <><Amount value={advance} /> (90%) is paid from the {fc.short} only after a passing AI evaluation and the freelancer&apos;s explicit request.</>
+      <><Amount value={advance} /> ({pct} of the invoice) is paid from the {fc.short} only after a passing AI evaluation and the freelancer&apos;s explicit request.</>
     ),
     tone: hasAdvance ? "done" : pendingOf("approveAdvance") ? "pending" : status === "Settled" || status === "Disputed" ? "skipped" : "todo",
     badge: hasAdvance ? "Paid" : pendingOf("approveAdvance") ? "Pending" : status === "Settled" || status === "Disputed" ? "Not taken" : "On request",
@@ -195,8 +197,8 @@ function UnverifiedMoneyNotice({ title, invoice }: { title: string; invoice: Inv
             <dd className="mt-0.5"><Amount value={invoice.amount} /></dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">Advance this would allow (90%)</dt>
-            <dd className="mt-0.5"><Amount value={advanceFor(invoice.amount)} /></dd>
+            <dt className="text-xs text-muted-foreground">Advance this would allow ({advancePercentOfInvoice(invoice.advanceShareBps)})</dt>
+            <dd className="mt-0.5"><Amount value={advanceFor(invoice.amount, invoice.advanceShareBps)} /></dd>
           </div>
         </dl>
       </CardContent>
@@ -208,7 +210,7 @@ function UnverifiedMoneyNotice({ title, invoice }: { title: string; invoice: Inv
 export function FundsBreakdown({ invoice, reserveAvailable }: { invoice: InvoiceDetail; reserveAvailable: string }) {
   if (invoice.financialStatusVerified === false) return <UnverifiedMoneyNotice title="Where the money is" invoice={invoice} />
   const status = invoice.onchainStatus
-  const advance = advanceFor(invoice.amount)
+  const advance = advanceFor(invoice.amount, invoice.advanceShareBps)
   const hasAdvance = !isZero(invoice.advanceAmount)
   const fc = fundingCopy()
   const fee = hasAdvance ? advanceFeeFor(invoice.amount) : "0"
@@ -324,6 +326,7 @@ export function EvaluationPanel({
             <Sparkles className="size-4" aria-hidden /> AI evaluation
           </CardTitle>
           {evaluation.simulated && <SimulatedTag>Simulated AI evaluation</SimulatedTag>}
+          {evaluation.model === "scripted-demo-fixture" && <SimulatedTag>AI Evaluation</SimulatedTag>}
         </div>
         <CardDescription>
           The AI only recommends whether the work satisfies the agreed criteria. It is not the final arbiter, never
@@ -349,7 +352,7 @@ export function EvaluationPanel({
             </Pill>
             <p className="text-sm">{evaluation.summary}</p>
             <p className="text-xs text-muted-foreground">
-              {passedCount} of {evaluation.criteriaResults.length} criteria met
+              {passedCount} of {evaluation.criteriaResults.length} criteria met · pass threshold {PASS_SCORE_THRESHOLD}/100
             </p>
             <p className="text-xs text-muted-foreground">
               Status: <span className="font-medium text-foreground">Evaluated</span> · {formatDate(evaluation.evaluatedAt, true)}
@@ -588,9 +591,9 @@ export function InvoiceHeaderCard({
             <dd className="mt-0.5">{invoice.dueDate ? formatDate(invoice.dueDate) : "—"}</dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">{hasAdvance ? "Advanced (90%)" : "Possible advance (90%)"}</dt>
+            <dt className="text-xs text-muted-foreground">{hasAdvance ? `Advanced (${advancePercentOfInvoice(invoice.advanceShareBps)})` : `Possible advance (${advancePercentOfInvoice(invoice.advanceShareBps)})`}</dt>
             <dd className="mt-0.5">
-              <Amount value={hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount)} />
+              <Amount value={hasAdvance ? invoice.advanceAmount : advanceFor(invoice.amount, invoice.advanceShareBps)} />
             </dd>
           </div>
         </dl>

@@ -219,10 +219,10 @@ export interface AdvanceQuote {
   freelancerRemainder: bigint
 }
 
-/** The contract's own pure quote (90% advance, 300 bps fee on the advance). Never recompute this client-side. */
-export async function quoteAdvance(amount: bigint, opts?: ReadOptions): Promise<AdvanceQuote> {
+/** The contract's own pure quote for a client slider (default 10000 = 90% advance; fixed 1000 bps fee). Never recompute this client-side. */
+export async function quoteAdvance(amount: bigint, advanceShareBps: bigint = BigInt(10000), opts?: ReadOptions): Promise<AdvanceQuote> {
   const [advance, fee, vaultRepayment, freelancerRemainder] = await guarded("quoteAdvance", () =>
-    reader(opts).readContract({ address: contractAddresses.invoiceAdvance, abi: invoiceAdvanceV2Abi, functionName: "quoteAdvance", args: [amount], blockNumber: opts?.blockNumber })
+    reader(opts).readContract({ address: contractAddresses.invoiceAdvance, abi: invoiceAdvanceV2Abi, functionName: "quoteAdvance", args: [amount, advanceShareBps], blockNumber: opts?.blockNumber })
   )
   return { advance, fee, vaultRepayment, freelancerRemainder }
 }

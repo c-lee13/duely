@@ -173,6 +173,7 @@ export function createChainAdapter(opts: { scope: DeploymentScope; client?: Adap
             freelancer: addr(e.freelancer),
             amount: e.amount,
             criteriaHash: e.metadataHash as Bytes32,
+            advanceShareBps: "advanceShareBps" in e ? (e.advanceShareBps as bigint) : undefined,
             blockNumber: receipt.blockNumber,
           }
         }
@@ -201,6 +202,7 @@ export function createChainAdapter(opts: { scope: DeploymentScope; client?: Adap
         freelancer: addr(inv.freelancer),
         criteriaHash: inv.metadataHash as Bytes32,
         evaluationHash: inv.evaluationHash as Bytes32,
+        advanceShareBps: inv.advanceShareBps,
       }
     },
 
@@ -209,7 +211,7 @@ export function createChainAdapter(opts: { scope: DeploymentScope; client?: Adap
       await assertClientChain(c)
       // v2: advances are funded by DuelyVault, so "available" is what the vault can actually fund this block
       // (maxAdvanceNow: cash, the 80% utilization headroom, the 25% per-invoice cap and both pauses all applied),
-      // not a reserve balance. 900 RLUSD therefore needs at least 3,600 RLUSD of vault NAV.
+      // not a reserve balance. a 0.90 RLUSD advance (1 RLUSD demo invoice) therefore needs at least 3.60 RLUSD of vault NAV.
       if (isV2()) return (await getVaultSnapshot({ client: c })).maxAdvanceNow
       return getAvailableReserve({ client: c })
     },

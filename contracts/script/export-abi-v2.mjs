@@ -73,7 +73,7 @@ const SPEC = {
     functions: [
       "createInvoice", "cancelInvoice", "fundInvoice", "approveAdvance", "approveCompletion", "raiseDispute",
       "resolveDispute", "claim", "getInvoice", "quoteAdvance", "claimable", "totalClaimable", "totalEscrow",
-      "nextInvoiceId", "vault", "paymentToken", "FEE_BPS", "ADVANCE_BPS", "hasRole", "DEFAULT_ADMIN_ROLE",
+      "nextInvoiceId", "vault", "paymentToken", "FEE_BPS", "ADVANCE_BPS", "MIN_ADVANCE_SHARE_BPS", "hasRole", "DEFAULT_ADMIN_ROLE",
       "OPERATOR_ROLE", "EVALUATOR_ROLE",
     ],
     events: [

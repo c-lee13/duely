@@ -29,6 +29,8 @@ export interface UploadedSubmission {
   createdAt: string
   fundingVerifiedOnchain: boolean
   duplicate: boolean
+  /** Present only when the server evaluated the submission in the same request (scripted demo). */
+  evaluation?: unknown
   /** The server-issued path (needed only to build the app's Submission record). */
   storagePath: string
 }
@@ -73,6 +75,9 @@ export async function uploadEvidence(args: {
   onPhase?: (phase: UploadPhase) => void
 }): Promise<UploadedSubmission> {
   const mimeType = resolveMimeType(args.file)
+  const t0 = performance.now()
+  const log = (step: string) => console.info(`[submit-evidence] ${step} (+${Math.round(performance.now() - t0)}ms)`)
+  log(`start: ${args.file.name}, ${args.file.size} bytes, ${mimeType}`)
 
   args.onPhase?.("authorizing")
   const grant = await postJson<{ path: string; uploadToken: string }>("/api/evidence/upload-url", {
@@ -82,18 +87,24 @@ export async function uploadEvidence(args: {
     mimeType,
   })
 
+  log("upload slot granted; uploading to private storage")
   args.onPhase?.("uploading")
   const { error } = await createSupabaseBrowserClient()
     .storage.from(EVIDENCE_BUCKET)
     .uploadToSignedUrl(grant.path, grant.uploadToken, args.file, { contentType: mimeType })
   if (error) throw new EvidenceUploadError("UPLOAD_FAILED", "The file couldn't be uploaded. Check your connection and try again.")
 
+  log("file uploaded; saving submission (server also evaluates it in this call when the scripted demo is on)")
   args.onPhase?.("verifying")
   const res = await postJson<Omit<UploadedSubmission, "storagePath">>("/api/submissions", {
     invoiceId: args.invoiceId,
     storagePath: grant.path,
     fileName: args.file.name,
     note: args.note,
+  }).catch((e) => {
+    console.error(`[submit-evidence] POST /api/submissions FAILED (+${Math.round(performance.now() - t0)}ms): ${e instanceof EvidenceUploadError ? `${e.code}: ${e.message}` : String(e)}`)
+    throw e
   })
+  log(`submission saved: ${res.submissionId}${res.duplicate ? " (duplicate)" : ""}; evaluation ${res.evaluation ? "returned with it" : "not returned"}`)
   return { ...res, storagePath: grant.path }
 }

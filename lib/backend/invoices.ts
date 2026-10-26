@@ -58,6 +58,8 @@ export interface InvoiceRecordView {
   freelancer: Address
   amount: string
   advanceAmount: string
+  /** The client's slider: 5000..10000 bps of the 90% advance ceiling (10000 = a 90% advance, 5000 = 45%). */
+  advanceShareBps: number
   criteriaHash: Bytes32
   onchainStatus: OnchainInvoiceStatus
   submissionStatus: SubmissionStatus
@@ -132,6 +134,7 @@ export async function registerInvoice(deps: BackendDeps, input: CreateInvoiceInp
     userId,
     status: state.onchainStatus,
     blockNumber: Number(state.blockNumber),
+    advanceShareBps: Number(creation.advanceShareBps ?? state.advanceShareBps ?? BigInt(10000)),
   })
   const invoice = await deps.db.getInvoice(id)
   if (!invoice) throw new Error("registered invoice could not be read back")
@@ -150,6 +153,7 @@ export function toRecordView(invoice: InvoiceData, submissionStatus: SubmissionS
     amount: invoice.amount,
     // Never a cached figure presented as fact: without chain data the advance is reported as unknown-zero only if the cache says so, flagged unverified.
     advanceAmount: chain ? chain.advanceAmount.toString() : invoice.advance_amount,
+    advanceShareBps: invoice.advance_share_bps,
     criteriaHash: invoice.criteria_hash,
     onchainStatus: chain ? chain.onchainStatus : invoice.onchain_status,
     submissionStatus,

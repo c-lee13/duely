@@ -266,18 +266,18 @@ contract DuelyVaultTest is Test {
         // 900 advanced out, then 930 comes back (900 principal + 30 fee).
         vault.simulateAdvance(900 * E18, sink);
         assertEq(vault.totalAssets(), 1000 * E18, "advance does not change NAV");
-        rlusd.mint(sink, 30 * E18); // the freelancer/escrow side supplies the fee
+        rlusd.mint(sink, 100 * E18); // the freelancer/escrow side supplies the fee
         vm.prank(sink);
-        rlusd.transfer(address(vault), 930 * E18);
-        vault.simulateRepayment(900 * E18, 30 * E18);
+        rlusd.transfer(address(vault), 1000 * E18);
+        vault.simulateRepayment(900 * E18, 100 * E18);
 
         assertEq(vault.outstandingPrincipal(), 0);
-        assertEq(vault.totalAssets(), 1030 * E18, "NAV +fee only");
+        assertEq(vault.totalAssets(), 1100 * E18, "NAV +fee only");
 
-        uint256 sharesB = _deposit(lp2, 1030 * E18);
+        uint256 sharesB = _deposit(lp2, 1100 * E18);
         // LP2 paid the post-gain price, so LP2 receives (almost exactly) the same shares as LP1.
         assertApproxEqRel(sharesB, sharesA, 1e9);
-        _assertValue(lp1, 1030 * E18);
+        _assertValue(lp1, 1100 * E18);
     }
 
     function test_loss_lowersNavOnce_andLaterDepositorBuysCheaper() public {

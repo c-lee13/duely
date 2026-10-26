@@ -19,7 +19,7 @@ interface IDuelyVault is IERC4626 {
         address freelancer;
         uint256 invoiceAmount;
         uint256 principal;
-        uint256 fee; // quoted at funding (300 bps of invoiceAmount)
+        uint256 fee; // quoted at funding (1000 bps of invoiceAmount)
         uint256 principalRepaid;
         uint256 feeEarned; // 0 until repaid; stays 0 on loss
         uint256 loss; // principal when Lost, else 0

@@ -2,8 +2,15 @@ import { paymentTokenInfo } from "@/lib/chain/config"
 import { DATA_MODE, type DataMode } from "./data-mode"
 import type { TokenAmount } from "./domain"
 
-export const ADVANCE_BPS_NUMERATOR = BigInt(90)
-export const ADVANCE_BPS_DENOMINATOR = BigInt(100)
+/** The advance ceiling: the most any invoice can advance is 90% of its amount (at a 100% slider). */
+export const ADVANCE_CEILING_BPS = BigInt(9000)
+const BPS = BigInt(10000)
+/** The client's slider: the share of the 90% ceiling the freelancer may draw early. */
+export const MIN_ADVANCE_SHARE_BPS = 5000
+export const MAX_ADVANCE_SHARE_BPS = 10000
+export const DEFAULT_ADVANCE_SHARE_BPS = MAX_ADVANCE_SHARE_BPS
+/** Fixed financing fee (V2): 10% of the invoice, whatever the slider says. */
+export const FEE_PERCENT_OF_INVOICE = 10
 
 const ZERO = BigInt(0)
 const HUNDRED = BigInt(100)
@@ -58,9 +65,24 @@ export function toBig(amount: TokenAmount): bigint {
   return BigInt(amount)
 }
 
-/** floor(amount * 90 / 100) in base units: the contract's rule (identical at 6 and 18 decimals). */
-export function advanceFor(amount: TokenAmount): TokenAmount {
-  return ((toBig(amount) * ADVANCE_BPS_NUMERATOR) / ADVANCE_BPS_DENOMINATOR).toString()
+/**
+ * floor(amount * 9000 * advanceShareBps / 1e8) in base units: the contract's rule (identical at 6 and 18 decimals).
+ * `advanceShareBps` is the client's slider (5000..10000); without it the ceiling applies (a 90% advance).
+ */
+export function advanceFor(amount: TokenAmount, advanceShareBps: number = DEFAULT_ADVANCE_SHARE_BPS): TokenAmount {
+  return ((toBig(amount) * ADVANCE_CEILING_BPS * BigInt(advanceShareBps)) / (BPS * BPS)).toString()
+}
+
+/** The slider as the client sees it, e.g. 10000 -> 100, 7500 -> 75. */
+export function sliderPercent(advanceShareBps: number): number {
+  return advanceShareBps / 100
+}
+
+/** Share of the INVOICE that is advanced, e.g. 10000 -> "90%", 5000 -> "45%". Never rounds a fractional percent away. */
+export function advancePercentOfInvoice(advanceShareBps: number): string {
+  const bps = (advanceShareBps * 9000) / 10000 // basis points of the invoice
+  const pct = bps / 100
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}%`
 }
 
 /** Convert whole/decimal token text (e.g. "1000.5") to base units. Returns null if invalid. */

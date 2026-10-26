@@ -21,9 +21,20 @@ export function tokenDecimals(): number {
 }
 export const MAX_UINT256: bigint = (BigInt(1) << BigInt(256)) - BigInt(1)
 
-/** Advance = floor(amount * ADVANCE_BPS / BPS_DENOMINATOR), as in InvoiceAdvance.sol. */
+/** Advance ceiling = 90% of the invoice (the client's slider can only lower it), as in InvoiceAdvance.sol. */
 export const ADVANCE_BPS: bigint = BigInt(9000)
 export const BPS_DENOMINATOR: bigint = BigInt(10000)
+/** V2 client slider: the share of the 90% ceiling a freelancer may draw early (5000..10000 bps). */
+export const MIN_ADVANCE_SHARE_BPS: bigint = BigInt(5000)
+export const MAX_ADVANCE_SHARE_BPS: bigint = BPS_DENOMINATOR
+/** V2 financing fee: fixed 10% of the invoice, paid to the vault at settlement whatever the slider says. */
+export const FEE_BPS: bigint = BigInt(1000)
+
+export function assertAdvanceShareBps(advanceShareBps: bigint): void {
+  if (advanceShareBps < MIN_ADVANCE_SHARE_BPS || advanceShareBps > MAX_ADVANCE_SHARE_BPS) {
+    throw new RangeError("advanceShareBps must be between 5000 and 10000")
+  }
+}
 
 const BASE_UNITS_STRING = /^\d+$/
 
@@ -106,8 +117,19 @@ export function fromTokenAmount(value: string): bigint {
   return parsed
 }
 
-/** Advance the contract will pay for an invoice amount (floor division, integer math only). */
-export function advanceAmountFor(amount: bigint): bigint {
+/**
+ * Advance the contract will pay for an invoice amount (floor division, integer math only):
+ * floor(amount * 9000 * advanceShareBps / 1e8). `advanceShareBps` defaults to 10000 (the 90% ceiling), which is
+ * also the only value the V1 contracts know.
+ */
+export function advanceAmountFor(amount: bigint, advanceShareBps: bigint = MAX_ADVANCE_SHARE_BPS): bigint {
   assertUint256(amount, "amount")
-  return (amount * ADVANCE_BPS) / BPS_DENOMINATOR
+  assertAdvanceShareBps(advanceShareBps)
+  return (amount * ADVANCE_BPS * advanceShareBps) / (BPS_DENOMINATOR * BPS_DENOMINATOR)
+}
+
+/** V2 financing fee for an invoice amount: floor(amount * 1000 / 10000). */
+export function advanceFeeFor(amount: bigint): bigint {
+  assertUint256(amount, "amount")
+  return (amount * FEE_BPS) / BPS_DENOMINATOR
 }

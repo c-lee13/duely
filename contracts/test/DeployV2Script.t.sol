@@ -210,7 +210,7 @@ contract DeployV2ScriptTest is Test {
         t.mint(client, 1000e18);
         vm.startPrank(client);
         t.approve(address(escrow), type(uint256).max);
-        uint256 id = escrow.createInvoice(freelancer, 1000e18, keccak256("m"));
+        uint256 id = escrow.createInvoice(freelancer, 1000e18, keccak256("m"), 10_000);
         escrow.fundInvoice(id);
         vm.stopPrank();
         vm.prank(evaluator);

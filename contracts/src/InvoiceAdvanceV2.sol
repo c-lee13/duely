@@ -13,9 +13,10 @@ import {IInvoiceAdvanceV2} from "./IInvoiceAdvanceV2.sol";
 /// @notice Client escrow for freelance invoices. Advances are paid from the pooled DuelyVault, not
 /// from an operator reserve. This contract holds only client escrow; it never holds LP funds.
 ///
-/// Settlement economics (1,000 invoice): vault advances 900; the 30 fee (300 bps of invoice) is
-/// fixed when the advance is funded. On approval the escrow repays the vault 930 and pays the
-/// freelancer the remaining 70. On a client-win dispute the client is refunded all 1,000 and the
+/// Settlement economics (1,000 invoice, client slider 100%): vault advances 900; the 100 fee
+/// (1000 bps of invoice) is fixed when the advance is funded. On approval the escrow repays the
+/// vault 1,000 and the freelancer's remainder is 0. At a 50% slider the vault advances 450, the
+/// fee is still 100 and the freelancer's remainder is 450. On a client-win dispute the client is refunded all 1,000 and the
 /// vault finalizes the 900 principal as a loss (no fee). Without an advance, the freelancer gets
 /// the full amount and no fee exists.
 ///
@@ -30,8 +31,11 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant EVALUATOR_ROLE = keccak256("EVALUATOR_ROLE");
 
+    /// @notice Ceiling of the advance: the share of the invoice an advance can reach at a 100% slider.
     uint256 public constant ADVANCE_BPS = 9_000;
-    uint256 public constant FEE_BPS = 300;
+    /// @notice Lowest slider value a client may choose (share of the ADVANCE_BPS ceiling).
+    uint256 public constant MIN_ADVANCE_SHARE_BPS = 5_000;
+    uint256 public constant FEE_BPS = 1_000;
     uint256 private constant BPS = 10_000;
 
     IERC20 public immutable paymentToken;
@@ -73,7 +77,9 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
     // Invoice lifecycle
     // ---------------------------------------------------------------------
 
-    function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash)
+    /// @param advanceShareBps client-chosen slider, 5000..10000: the share of the 90% ADVANCE_BPS ceiling
+    /// the freelancer may draw early (50% -> 45% of the invoice, 100% -> 90%). The fee is fixed at FEE_BPS.
+    function createInvoice(address freelancer, uint256 amount, bytes32 metadataHash, uint256 advanceShareBps)
         external
         returns (uint256 invoiceId)
     {
@@ -84,6 +90,7 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
         if (freelancer == msg.sender) revert InvalidInvoiceParties();
         if (amount == 0) revert InvalidAmount();
         if (metadataHash == bytes32(0)) revert InvalidHash();
+        if (advanceShareBps < MIN_ADVANCE_SHARE_BPS || advanceShareBps > BPS) revert InvalidAdvanceShare();
 
         invoiceId = nextInvoiceId++;
         invoices[invoiceId] = Invoice({
@@ -92,12 +99,13 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
             amount: amount,
             advanceAmount: 0,
             advanceFee: 0,
+            advanceShareBps: advanceShareBps,
             metadataHash: metadataHash,
             evaluationHash: bytes32(0),
             status: InvoiceStatus.Created
         });
 
-        emit InvoiceCreated(invoiceId, freelancer, msg.sender, amount, metadataHash);
+        emit InvoiceCreated(invoiceId, freelancer, msg.sender, amount, metadataHash, advanceShareBps);
     }
 
     function cancelInvoice(uint256 invoiceId) external {
@@ -139,7 +147,7 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
         if (evaluationHash == bytes32(0)) revert InvalidHash();
 
         uint256 amount = inv.amount;
-        (uint256 advance, uint256 fee,,) = quoteAdvance(amount);
+        (uint256 advance, uint256 fee,,) = quoteAdvance(amount, inv.advanceShareBps);
         if (advance == 0) revert ZeroAdvance();
 
         address freelancer = inv.freelancer;
@@ -232,14 +240,14 @@ contract InvoiceAdvanceV2 is IInvoiceAdvanceV2, AccessControl, ReentrancyGuard {
         return _load(invoiceId);
     }
 
-    /// @notice advance = floor(amount * 9000 / 10000); fee = floor(amount * 300 / 10000);
+    /// @notice advance = floor(amount * 9000 * advanceShareBps / 1e8); fee = floor(amount * 1000 / 10000);
     /// vaultRepayment = advance + fee; freelancerRemainder = amount - vaultRepayment.
-    function quoteAdvance(uint256 amount)
+    function quoteAdvance(uint256 amount, uint256 advanceShareBps)
         public
         pure
         returns (uint256 advance, uint256 fee, uint256 vaultRepayment, uint256 freelancerRemainder)
     {
-        advance = Math.mulDiv(amount, ADVANCE_BPS, BPS);
+        advance = Math.mulDiv(amount, ADVANCE_BPS * advanceShareBps, BPS * BPS);
         fee = Math.mulDiv(amount, FEE_BPS, BPS);
         vaultRepayment = advance + fee;
         freelancerRemainder = amount - vaultRepayment;

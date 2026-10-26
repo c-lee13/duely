@@ -125,6 +125,17 @@ describe("createEvaluatorSignerFromEnv: key handling", () => {
     assert.equal(s.address, account.address)
   })
 
+  it("accepts the key without the 0x prefix (common in wallet exports)", () => {
+    const key = generatePrivateKey()
+    const account = privateKeyToAccount(key)
+    withEvaluator(account.address)
+    const chain = createMockChain()
+    const s = createEvaluatorSignerFromEnv(scope, { EVALUATOR_PRIVATE_KEY: ` ${key.slice(2)} ` }, { publicClient: chain.publicClient })
+    assert.equal(s.available, true)
+    assert.equal(s.address, account.address)
+    assert.equal(describeSignerAvailability({ EVALUATOR_PRIVATE_KEY: key.slice(2) }), "ready-to-check")
+  })
+
   it("describeSignerAvailability reports why, without leaking the key", () => {
     const key = generatePrivateKey()
     withEvaluator(privateKeyToAccount(key).address)

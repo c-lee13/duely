@@ -129,8 +129,8 @@ describe("v2 deployment selection", () => {
     assert.equal(d.token.symbol, "RLUSD")
     assert.equal(d.token.isDemoToken, false)
     assert.equal(d.token.decimals, 18)
-    assert.equal(contractAddresses.invoiceAdvance, "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96")
-    assert.equal(vaultAddress(), "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8")
+    assert.equal(contractAddresses.invoiceAdvance, "0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302")
+    assert.equal(vaultAddress(), "0xCb031203549809DE05c4e9fa097d881d375094b8")
     assert.equal(d.vault?.shareDecimals, 24)
     assert.equal(d.roles.evaluator, "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb")
   })
@@ -149,14 +149,15 @@ describe("v2 deployment selection", () => {
 // ---- reads -----------------------------------------------------------------------------------------
 
 describe("v2 reads", () => {
-  it("getInvoice decodes the 8-field V2 struct (including advanceFee) and its status", async () => {
+  it("getInvoice decodes the 9-field V2 struct (including advanceFee and advanceShareBps) and its status", async () => {
     const { reader, calls } = fakeChain({
       getInvoice: () => ({
         freelancer: FREELANCER,
         client: LP,
         amount: RL(1000),
         advanceAmount: RL(900),
-        advanceFee: RL(27),
+        advanceFee: RL(100),
+        advanceShareBps: B(10000),
         metadataHash: ("0x" + "11".repeat(32)) as Hex,
         evaluationHash: EVAL,
         status: 2,
@@ -164,7 +165,8 @@ describe("v2 reads", () => {
     })
     const inv = await getInvoice(7, { client: reader })
     assert.equal(inv.advanceAmount, RL(900))
-    assert.equal(inv.advanceFee, RL(27))
+    assert.equal(inv.advanceFee, RL(100))
+    assert.equal(inv.advanceShareBps, B(10000))
     assert.equal(inv.statusName, "Advanced")
     assert.equal(calls[0].address, contractAddresses.invoiceAdvance)
   })
@@ -205,12 +207,18 @@ describe("v2 reads", () => {
   it("claimable and quoteAdvance come straight from the contract", async () => {
     const { reader } = fakeChain({
       claimable: (a: readonly unknown[]) => (String(a[0]).toLowerCase() === FREELANCER.toLowerCase() ? RL(70) : ZERO),
-      quoteAdvance: (a: readonly unknown[]) => [(a[0] as bigint * B(9)) / B(10), (a[0] as bigint * B(27)) / B(1000), (a[0] as bigint * B(927)) / B(1000), (a[0] as bigint * B(73)) / B(1000)],
+      quoteAdvance: (a: readonly unknown[]) => {
+        const amount = a[0] as bigint
+        const advance = (amount * B(9000) * (a[1] as bigint)) / B(100000000)
+        const fee = (amount * B(1)) / B(10)
+        return [advance, fee, advance + fee, amount - advance - fee]
+      },
     })
     assert.equal(await getClaimable(FREELANCER, { client: reader }), RL(70))
     assert.equal(await getClaimable(STRANGER, { client: reader }), ZERO)
-    const q = await quoteAdvance(RL(1000), { client: reader })
-    assert.equal(q.advance, RL(900))
+    const q = await quoteAdvance(RL(1000), B(5000), { client: reader })
+    assert.equal(q.advance, RL(450))
+    assert.equal(q.fee, RL(100))
     assert.equal(q.fee + q.advance, q.vaultRepayment)
     assert.equal(q.advance + q.fee + q.freelancerRemainder, RL(1000))
   })

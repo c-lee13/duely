@@ -19,7 +19,7 @@ const ROLES: Array<{ role: DemoRole; title: string; icon: typeof Building2; text
     role: "freelancer",
     title: "I'm a freelancer",
     icon: Briefcase,
-    text: "Submit evidence, get an AI evaluation, and request a 90% early advance once you pass.",
+    text: "Submit evidence, get an AI evaluation, and request an early advance once you pass, at the rate the client chose.",
     cta: "Open freelancer dashboard",
   },
   {
@@ -34,7 +34,7 @@ const ROLES: Array<{ role: DemoRole; title: string; icon: typeof Building2; text
 const STEPS = [
   { icon: Lock, title: "1. Client escrows", text: "The full invoice amount is locked, with criteria fixed up front." },
   { icon: FileCheck2, title: "2. Freelancer submits", text: "Evidence is checked against those criteria by an AI evaluator." },
-  { icon: Sparkles, title: "3. Freelancer asks for an advance", text: "After a pass, they explicitly request 90% from the platform reserve." },
+  { icon: Sparkles, title: "3. Freelancer asks for an advance", text: "After a pass, they explicitly request the advance the client allowed (up to 90% of the invoice) from the platform reserve." },
   { icon: Banknote, title: "4. Client approves", text: "Escrow refills the reserve for the advance and pays the remainder." },
 ]
 
@@ -51,7 +51,7 @@ export default function WelcomePage() {
           Get paid for finished work before the client signs off.
         </h1>
         <p className="max-w-2xl text-lg text-muted-foreground">
-          Clients lock payment up front. Freelancers prove the work against agreed criteria and can draw 90% early from
+          Clients lock payment up front. Freelancers prove the work against agreed criteria and can draw an early advance (at a rate the client sets, up to 90%) from
           a platform-funded reserve. The AI recommends; it never moves money.
         </p>
         <p className="max-w-2xl text-sm text-muted-foreground">

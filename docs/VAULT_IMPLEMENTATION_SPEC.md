@@ -15,6 +15,14 @@ Replace the platform-funded reserve with **RLUSD supplied by external liquidity 
 - On a dispute the client wins, the client is **credited a full refund** (claimable) and the vault **recognizes the loss of the whole principal**. LPs bear it through a lower share price.
 - LPs deposit RLUSD and receive transferable ERC-20 shares, **`Duely Vault Share` (`dvRLUSD`)**. Shares are a proportional claim on net vault assets, **not** a claim on specific invoices and **not** a guaranteed redemption amount.
 
+> **Amendment: client-chosen advance rate and 10% fee (supersedes the fixed 90% / 300 bps figures in this spec, which are kept below as the historical 100%-slider shape at the old fee).**
+> - `createInvoice(freelancer, amount, metadataHash, advanceShareBps)`: the client picks `advanceShareBps` in 5000..10000 (a 50%..100% slider). It is stored on the invoice, echoed in `InvoiceCreated`, and fixed for the invoice's life.
+> - `advance = floor(amount * 9000 * advanceShareBps / 1e8)`: 100% advances 90% of the escrow, 50% advances 45%. `ADVANCE_BPS = 9000` is now the ceiling, `MIN_ADVANCE_SHARE_BPS = 5000` the floor.
+> - `fee = floor(amount * 1000 / 10000)`: a fixed **10%** of the invoice (was 300 bps), paid to the vault whatever the slider says. The vault enforces `fee == floor(amount * FEE_BPS / 10000)` and `principal <= 90%` unchanged; `FEE_BPS` is 1000 in both contracts.
+> - Settlement: vault repaid `advance + fee`; the freelancer is credited `amount - advance - fee` (0 at 100%, 450 of 1,000 at 50%). Without an advance the freelancer still gets the full amount and no fee exists.
+> - Off-chain: `invoices.advance_share_bps` (migration `20261026000010`) mirrors the chain; `advance_requests_guard` checks the same formula; `POST /api/advances` refuses with `INTEGRITY_MISMATCH` if the chain and the database disagree. V1 invoices keep 10000 (the old fixed 90%).
+> - Deployment: this is an ABI-breaking change (new `createInvoice`/`quoteAdvance` signatures, 9-field `Invoice`), so the vault and escrow must be redeployed (`docs/V2_DEPLOY_RUNBOOK.md`); the generated ABI in `lib/chain/generated` already matches the new contracts.
+
 ### Worked example (approved invoice, 1,000 RLUSD)
 
 | Item | RLUSD |
@@ -472,7 +480,7 @@ Findings, severities and the decisions needed before A6 (dispute-time exit polic
 ### 9.3 Remaining ambiguities and contradictions (not decided here)
 
 1. **`CLAUDE.md` §4 vs. this spec on `lib/chain`.** `CLAUDE.md` assigns `lib/shared` and `lib/chain` to the integration owner, while the V1 `docs/CONTRACT_SPEC.md` lets Track A edit `lib/chain/**` (including generated ABIs), and this spec has Person A owning generated ABIs and manifests. V2 follows the spec/CONTRACT_SPEC convention (A writes `lib/chain/generated/`; B only imports). Hand-written `lib/chain` adapters (reads, writes, deployments config) are not assigned by any decision; confirm whether A or B writes the V2 adapters.
-2. **Demo size.** A 900 RLUSD advance needs at least 3,600 RLUSD of NAV and 900 of available balance. If testnet RLUSD is short, use proportionally smaller invoices. The 1,000 RLUSD example remains the canonical documentation example, not a mandatory demo size.
+2. **Demo size.** A 900 RLUSD advance needs at least 3,600 RLUSD of NAV and 900 of available balance. If testnet RLUSD is short, use proportionally smaller invoices. The 1,000 RLUSD example remains the canonical documentation example, not a mandatory demo size. The hackathon demo uses a **1 RLUSD** invoice with a **4 RLUSD** LP deposit (advance 0.90, fee 0.03, vault repaid 0.93, freelancer remainder 0.07); all risk limits are unchanged.
 3. **Tiny-invoice rounding.** Fee is floored, so sufficiently small invoices carry a zero fee, and `advance == 0` reverts. A minimum invoice size is not specified; A2/A3 may propose one.
 4. **`PAUSER_ROLE`** is a new role beyond the "pause" authority named in the decisions. It is added only to make pausing cheaper than unpausing. If unwanted, fold it into `OPERATOR_ROLE` without affecting anything else.
 5. **Fee on partial dispute outcomes** is moot (binary only), but if the team later adds partial-recovery rulings, fee priority and the `finalizeLoss` signature must be redesigned.

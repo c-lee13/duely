@@ -47,7 +47,7 @@ contract DuelyVaultSettlementTest is Test {
     /// client's 1,000 so it can repay 930.
     function _advance(uint256 id) internal {
         rlusd.mint(address(escrow), 1000 * E18);
-        escrow.fund(vault, id, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, id, freelancer, 1000 * E18, 900 * E18, 100 * E18);
     }
 
     function _snapshot(uint256 id) internal view returns (bytes32) {
@@ -74,20 +74,20 @@ contract DuelyVaultSettlementTest is Test {
         assertEq(nav, 4000 * E18);
 
         vm.expectEmit(true, false, false, true, address(vault));
-        emit IDuelyVault.AdvanceRepaid(1, 900 * E18, 30 * E18);
-        escrow.repay(vault, 1, 930 * E18);
+        emit IDuelyVault.AdvanceRepaid(1, 900 * E18, 100 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
 
         assertEq(vault.outstandingPrincipal(), 0);
-        assertEq(vault.availableLiquidity(), 4030 * E18, "3100 cash + 930 repayment");
-        assertEq(vault.totalAssets(), 4030 * E18, "NAV +fee exactly");
-        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(vault.availableLiquidity(), 4100 * E18, "3100 cash + 930 repayment");
+        assertEq(vault.totalAssets(), 4100 * E18, "NAV +fee exactly");
+        assertEq(vault.totalFeesEarned(), 100 * E18);
         assertEq(vault.totalRealizedLosses(), 0);
-        assertEq(rlusd.balanceOf(address(escrow)), 1000 * E18 - 930 * E18);
+        assertEq(rlusd.balanceOf(address(escrow)), 1000 * E18 - 1000 * E18);
 
         IDuelyVault.Advance memory a = vault.getAdvance(1);
         assertEq(uint8(a.status), uint8(IDuelyVault.AdvanceStatus.Repaid));
         assertEq(a.principalRepaid, 900 * E18);
-        assertEq(a.feeEarned, 30 * E18);
+        assertEq(a.feeEarned, 100 * E18);
         assertEq(a.loss, 0);
         assertEq(a.principal, 900 * E18, "terms are preserved");
     }
@@ -98,20 +98,20 @@ contract DuelyVaultSettlementTest is Test {
         rlusd.mint(address(escrow), 5000 * E18);
         uint256 escrowBefore = rlusd.balanceOf(address(escrow));
         escrow.repay(vault, 1, type(uint256).max);
-        assertEq(escrowBefore - rlusd.balanceOf(address(escrow)), 930 * E18);
-        assertEq(vault.totalAssets(), 4030 * E18);
+        assertEq(escrowBefore - rlusd.balanceOf(address(escrow)), 1000 * E18);
+        assertEq(vault.totalAssets(), 4100 * E18);
     }
 
     function test_recordRepayment_onlyOnce() public {
         _advance(1);
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         bytes32 snap = _snapshot(1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IDuelyVault.AdvanceNotOpen.selector, 1, IDuelyVault.AdvanceStatus.Repaid
             )
         );
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         assertEq(_snapshot(1), snap, "duplicate repayment changed nothing");
     }
 
@@ -141,7 +141,7 @@ contract DuelyVaultSettlementTest is Test {
         rlusd.transfer(stranger, 500 * E18);
         snap = _snapshot(1);
         vm.expectRevert();
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         assertEq(_snapshot(1), snap);
         assertEq(uint8(vault.getAdvance(1).status), uint8(IDuelyVault.AdvanceStatus.Open));
     }
@@ -151,7 +151,7 @@ contract DuelyVaultSettlementTest is Test {
         bytes32 snap = _snapshot(1);
         rlusd.pause();
         vm.expectRevert();
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         rlusd.unpause();
         assertEq(_snapshot(1), snap);
     }
@@ -209,10 +209,10 @@ contract DuelyVaultSettlementTest is Test {
                 IDuelyVault.AdvanceNotOpen.selector, 1, IDuelyVault.AdvanceStatus.Lost
             )
         );
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         assertEq(_snapshot(1), snap, "NAV decreased exactly once");
 
-        escrow.repay(vault, 2, 930 * E18);
+        escrow.repay(vault, 2, 1000 * E18);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IDuelyVault.AdvanceNotOpen.selector, 2, IDuelyVault.AdvanceStatus.Repaid
@@ -242,9 +242,9 @@ contract DuelyVaultSettlementTest is Test {
         vault.pauseAdvances();
         vm.stopPrank();
 
-        escrow.repay(vault, 1, 930 * E18);
+        escrow.repay(vault, 1, 1000 * E18);
         escrow.loss(vault, 2);
-        assertEq(vault.totalAssets(), 4000 * E18 + 30 * E18 - 900 * E18);
+        assertEq(vault.totalAssets(), 4000 * E18 + 100 * E18 - 900 * E18);
 
         // LPs remain locked out by the full pause until it is lifted.
         assertEq(vault.maxRedeem(lp1), 0);
@@ -263,16 +263,16 @@ contract DuelyVaultSettlementTest is Test {
         assertApproxEqAbs(v2, 1000 * E18, 2);
 
         _advance(1);
-        escrow.repay(vault, 1, 930 * E18); // +30
-        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp1)), 3022.5e18, 2);
-        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp2)), 1007.5e18, 2);
+        escrow.repay(vault, 1, 1000 * E18); // +100
+        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp1)), 3075e18, 2);
+        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp2)), 1025e18, 2);
 
         _advance(2);
         escrow.loss(vault, 2); // -900
-        // NAV 3130 split 75/25.
-        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp1)), 2347.5e18, 2);
-        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp2)), 782.5e18, 2);
-        assertEq(vault.totalAssets(), 3130 * E18);
+        // NAV 3200 split 75/25.
+        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp1)), 2400e18, 2);
+        assertApproxEqAbs(vault.convertToAssets(vault.balanceOf(lp2)), 800e18, 2);
+        assertEq(vault.totalAssets(), 3200 * E18);
     }
 
     function test_laterDepositor_afterLoss_isNotChargedForIt() public {
@@ -304,12 +304,12 @@ contract DuelyVaultSettlementTest is Test {
         v.deposit(4000 * E18, lp1);
         vm.stopPrank();
         tok.mint(address(esc), 1000 * E18);
-        esc.fund(v, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        esc.fund(v, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
 
         tok.setTax(true); // from now on the vault receives 1 wei less than sent
         uint256 nav = v.totalAssets();
         vm.expectRevert(IDuelyVault.UnsupportedTokenBehavior.selector);
-        esc.repay(v, 1, 930 * E18);
+        esc.repay(v, 1, 1000 * E18);
         assertEq(v.totalAssets(), nav);
         assertEq(uint8(v.getAdvance(1).status), uint8(IDuelyVault.AdvanceStatus.Open));
         assertEq(v.totalFeesEarned(), 0);

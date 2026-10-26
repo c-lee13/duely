@@ -62,12 +62,18 @@ export function createSignerFromWallet(opts: {
  * evaluator, the result is the explicit "unavailable" signer, so advances answer 503 INTEGRATION_UNAVAILABLE. It never
  * falls back to another account, to a mock signer, or to the browser.
  */
+/** Accepts the key with or without the 0x prefix (wallet exports often omit it). Never logged. */
+function normalizeKey(raw: string | undefined): string | undefined {
+  const k = raw?.trim()
+  return k && /^[0-9a-fA-F]{64}$/.test(k) ? `0x${k}` : k
+}
+
 export function createEvaluatorSignerFromEnv(
   scope: DeploymentScope,
   env: Record<string, string | undefined> = process.env,
   overrides: { publicClient?: ChainWriteClient; walletFor?: (account: ReturnType<typeof privateKeyToAccount>) => ChainWalletClient } = {}
 ): AdvanceSigner {
-  const key = env.EVALUATOR_PRIVATE_KEY?.trim()
+  const key = normalizeKey(env.EVALUATOR_PRIVATE_KEY)
   if (!key || !PRIVATE_KEY.test(key)) return unavailableSigner
   let account: ReturnType<typeof privateKeyToAccount>
   try {
@@ -84,7 +90,7 @@ export function createEvaluatorSignerFromEnv(
 
 /** Why the signer is unavailable, without revealing anything about the key. For diagnostics endpoints and docs. */
 export function describeSignerAvailability(env: Record<string, string | undefined> = process.env): "ready-to-check" | "no-key" | "malformed-key" | "wrong-account" {
-  const key = env.EVALUATOR_PRIVATE_KEY?.trim()
+  const key = normalizeKey(env.EVALUATOR_PRIVATE_KEY)
   if (!key) return "no-key"
   if (!PRIVATE_KEY.test(key)) return "malformed-key"
   try {

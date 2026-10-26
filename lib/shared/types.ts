@@ -48,6 +48,8 @@ export interface InvoiceRecord {
   freelancer: Address
   amount: TokenAmount
   advanceAmount: TokenAmount // actual amount advanced, 0 before advance
+  /** Client-chosen slider, 5000..10000 bps of the 90% advance ceiling (10000 = 90% of the invoice, 5000 = 45%). */
+  advanceShareBps: number
   /** Keccak-256 of the canonical criteria (lib/shared/criteria.ts); on-chain it is `metadataHash`. */
   criteriaHash: Bytes32
   onchainStatus: OnchainInvoiceStatus

@@ -84,6 +84,19 @@
   },
   {
     "type": "function",
+    "name": "MIN_ADVANCE_SHARE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "OPERATOR_ROLE",
     "inputs": [],
     "outputs": [
@@ -195,6 +208,11 @@
         "name": "metadataHash",
         "type": "bytes32",
         "internalType": "bytes32"
+      },
+      {
+        "name": "advanceShareBps",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [
@@ -257,6 +275,11 @@
           },
           {
             "name": "advanceFee",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "advanceShareBps",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -373,6 +396,11 @@
     "inputs": [
       {
         "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "advanceShareBps",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -634,6 +662,12 @@
         "type": "bytes32",
         "indexed": false,
         "internalType": "bytes32"
+      },
+      {
+        "name": "advanceShareBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -868,6 +902,11 @@
   {
     "type": "error",
     "name": "InvalidAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidAdvanceShare",
     "inputs": []
   },
   {

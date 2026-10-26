@@ -39,7 +39,7 @@ import { canSubmitEvidence, evaluationFor, getAdvanceEligibility } from "@/lib/f
 import { blockedReasonsOf, isGithubEvaluation } from "@/lib/frontend/github-evaluation"
 import { githubLinks, shortSha } from "@/lib/frontend/github-input"
 import { EVIDENCE_ACCEPT, EVIDENCE_MAX_BYTES } from "@/lib/mocks/mock-repository"
-import { formatToken } from "@/lib/frontend/token"
+import { advancePercentOfInvoice, formatToken, sliderPercent } from "@/lib/frontend/token"
 import { advanceFeeFor, fundingCopy } from "@/lib/frontend/protocol-copy"
 import { tryExplorerTxUrl } from "@/lib/chain/config"
 
@@ -85,6 +85,17 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
         }
       : baseEligibility
   const [confirmAdvance, setConfirmAdvance] = React.useState(false)
+  // Instant demo (NEXT_PUBLIC_DEMO_INSTANT_EVALUATION=true): Submit shows the scripted pass at once and calls no API. Only the
+  // evaluation blockers are lifted in the UI; funding, dispute and vault-liquidity blockers still apply. POST /api/advances
+  // records the scripted evaluation itself (server flag DUELY_MOCK_AI_EVALUATION) and re-checks the chain before signing.
+  const [instantPass, setInstantPass] = React.useState<string | null>(null)
+  const EVALUATION_BLOCKERS = ["NO_SUBMISSION", "NOT_EVALUATED", "STALE_EVALUATION", "EVALUATION_FAILED"]
+  const shownEligibility = instantPass
+    ? (() => {
+        const blockers = eligibility.blockers.filter((b) => !EVALUATION_BLOCKERS.includes(b.code))
+        return { ...eligibility, blockers, eligible: blockers.length === 0 }
+      })()
+    : eligibility
 
   const retryEval = useAction((repo) => repo.requestEvaluation(latest!.submissionId))
   const advance = useAction((repo) => repo.requestAdvance(invoice.invoiceId))
@@ -92,7 +103,9 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
   const lastRequest = advanceRequests[0]
 
   async function onAdvance() {
+    console.info("[submit-evidence] advance clicked; calling POST /api/advances (evaluator signs approveAdvance on the escrow)")
     const r = await advance.run()
+    console.info(`[submit-evidence] advance response: ${r.ok ? `${r.value.status}${r.value.txHash ? ` tx ${r.value.txHash}` : ""}` : `error: ${r.error}`}`)
     setConfirmAdvance(false)
     if (!r.ok) return toast({ tone: "error", title: "Advance request failed", description: r.error })
     if (r.value.status === "paid")
@@ -108,6 +121,7 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
       passed={e.passed}
       eligible={eligibility.eligible}
       amount={eligibility.amount}
+      advanceShareBps={invoice.advanceShareBps}
       firstBlocker={eligibility.blockers[0]?.message}
       invoiceStatus={invoice.onchainStatus}
     />
@@ -136,7 +150,16 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
-          {showUpload && <EvidenceForm invoiceId={invoice.invoiceId} hasPrevious={!!latest} disabled={evaluating} criteria={invoice.criteria} />}
+          {showUpload && !instantPass && (
+            <EvidenceForm
+              invoiceId={invoice.invoiceId}
+              hasPrevious={!!latest}
+              disabled={evaluating}
+              criteria={invoice.criteria}
+              onInstantPass={setInstantPass}
+            />
+          )}
+          {instantPass && <InstantDemoResult fileName={instantPass} criteria={invoice.criteria} />}
 
           {latest && (
             <Card>
@@ -207,9 +230,11 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
 
         <div className="space-y-6">
           <AdvanceCard
-            eligible={eligibility.eligible}
-            amount={eligibility.amount}
-            blockers={eligibility.blockers.map((b) => b.message)}
+            eligible={shownEligibility.eligible}
+            amount={shownEligibility.amount}
+            advanceShareBps={invoice.advanceShareBps}
+            feeAmount={advanceFeeFor(invoice.amount)}
+            blockers={shownEligibility.blockers.map((b) => b.message)}
             pending={advance.pending}
             invoiceStatus={invoice.onchainStatus}
             advanceAmount={invoice.advanceAmount}
@@ -244,7 +269,7 @@ function Body({ bundle, reload }: { bundle: InvoiceBundle; reload: () => void })
       <AlertDialog open={confirmAdvance} onOpenChange={(o) => !o && !advance.pending && setConfirmAdvance(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Request your 90% advance?</AlertDialogTitle>
+            <AlertDialogTitle>Request your {formatToken(eligibility.amount)} advance?</AlertDialogTitle>
             <AlertDialogDescription>
               {fc.pull
                 ? <>The liquidity vault will pay you {formatToken(eligibility.amount)} now. When the client approves, escrow repays the vault that amount plus a {formatToken(advanceFeeFor(invoice.amount))} financing fee, and the remaining {formatToken((BigInt(invoice.amount) - BigInt(eligibility.amount) - BigInt(advanceFeeFor(invoice.amount))).toString())} is credited to you to claim.</>
@@ -268,6 +293,7 @@ function NextStep({
   passed,
   eligible,
   amount,
+  advanceShareBps,
   firstBlocker,
   invoiceStatus,
 }: {
@@ -276,6 +302,7 @@ function NextStep({
   passed: boolean
   eligible: boolean
   amount: string
+  advanceShareBps: number
   firstBlocker?: string
   invoiceStatus: string
 }) {
@@ -317,7 +344,7 @@ function NextStep({
         <AlertTitle>Next step: you can request an advance</AlertTitle>
         <AlertDescription className="space-y-2">
           <p>
-            The AI recommends a pass. Requesting is your choice: <Amount value={amount} /> (90%) would be paid from {fc.source}. Nothing is paid until you request it and it confirms.
+            The AI recommends a pass. Requesting is your choice: <Amount value={amount} /> ({advancePercentOfInvoice(advanceShareBps)} of the invoice, the rate the client chose) would be paid from {fc.source}. Nothing is paid until you request it and it confirms.
           </p>
           <a href="#advance" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
             Go to advance request <ArrowDown className="size-3.5" aria-hidden />
@@ -337,6 +364,8 @@ function NextStep({
 function AdvanceCard(props: {
   eligible: boolean
   amount: string
+  advanceShareBps: number
+  feeAmount: string
   blockers: string[]
   pending: boolean
   invoiceStatus: string
@@ -355,7 +384,7 @@ function AdvanceCard(props: {
         <CardTitle className="flex items-center gap-2">
           <Rocket className="size-4" aria-hidden /> Early advance
         </CardTitle>
-        <CardDescription>90% of the invoice, rounded down, paid from {fc.source} after a passing evaluation.{fc.pull ? " A 3% financing fee is taken from the settlement." : ""}</CardDescription>
+        <CardDescription>{advancePercentOfInvoice(props.advanceShareBps)} of the invoice, rounded down (the client set a {sliderPercent(props.advanceShareBps)}% advance rate), paid from {fc.source} after a passing evaluation.{fc.pull ? ` A ${formatToken(props.feeAmount)} financing fee (10% of the invoice) is taken from the settlement.` : ""}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div className="flex items-baseline justify-between">
@@ -384,7 +413,7 @@ function AdvanceCard(props: {
         ) : (
           <>
             <Button size="lg" className="w-full" disabled={!props.eligible} onClick={props.onRequest}>
-              <Rocket /> Request 90% advance
+              <Rocket /> Request {formatToken(props.amount)} advance
             </Button>
             {!props.eligible && props.blockers.length > 0 && (
               <ul className="space-y-1.5 rounded-lg bg-muted/60 p-3" aria-label="Why the advance isn't available">
@@ -413,9 +442,26 @@ function AdvanceCard(props: {
   )
 }
 
-function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceId: string; hasPrevious: boolean; disabled: boolean; criteria: AcceptanceCriterion[] }) {
+const INSTANT_DEMO = process.env.NEXT_PUBLIC_DEMO_INSTANT_EVALUATION === "true"
+/** How long the scripted demo "evaluates" before showing the result and enabling the advance. */
+const INSTANT_DEMO_DELAY_MS = 8000
+
+function EvidenceForm({
+  invoiceId,
+  hasPrevious,
+  disabled,
+  criteria,
+  onInstantPass,
+}: {
+  invoiceId: string
+  hasPrevious: boolean
+  disabled: boolean
+  criteria: AcceptanceCriterion[]
+  onInstantPass?: (fileName: string) => void
+}) {
   const toast = useToast()
-  const mock = useRepository().mode === "mock"
+  const repository = useRepository()
+  const mock = repository.mode === "mock"
   const [file, setFile] = React.useState<File | null>(null)
   const [note, setNote] = React.useState("")
   const [outcome, setOutcome] = React.useState<"pass" | "fail">("pass")
@@ -423,6 +469,7 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
   const [dragging, setDragging] = React.useState(false)
   const [phase, setPhase] = React.useState<"idle" | "uploading" | "evaluating">("idle")
   const [done, setDone] = React.useState<{ fileName: string } | null>(null)
+  const [scriptedWait, setScriptedWait] = React.useState(false)
   const [kind, setKind] = React.useState<"file" | "github">("file")
   const inputRef = React.useRef<HTMLInputElement>(null)
 
@@ -437,7 +484,10 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
       note,
       file,
       simulatedOutcome: outcome,
+      onEvaluating: () => setPhase("evaluating"),
     })
+    // The scripted demo evaluates inside the submission request: nothing more to call.
+    if (sub.evaluated) return sub
     // Evaluation failures are visible and retryable on the evaluation panel (live mode: the server may answer
     // "evaluation unavailable" when no evaluator is configured).
     setPhase("evaluating")
@@ -460,6 +510,17 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
     e.preventDefault()
     if (!file) return setFileError("Choose a file to upload.")
     setDone(null)
+    if (INSTANT_DEMO && !mock && onInstantPass) {
+      // No API call: show the scripted pass now. The advance endpoint records the scripted evaluation when it is requested.
+      console.info(`[submit-evidence] instant demo: showing scripted pass for ${file.name} after ${INSTANT_DEMO_DELAY_MS}ms (no API call)`)
+      setScriptedWait(true)
+      setPhase("evaluating")
+      await new Promise((resolve) => setTimeout(resolve, INSTANT_DEMO_DELAY_MS))
+      setScriptedWait(false)
+      setPhase("idle")
+      onInstantPass(file.name)
+      return
+    }
     const r = await submit.run()
     setPhase("idle")
     if (r.ok) {
@@ -608,10 +669,10 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
             </Alert>
           )}
 
-          <Button type="submit" size="lg" className="w-full sm:w-auto" disabled={disabled || submit.pending}>
-            {submit.pending ? (
+          <Button type="submit" size="lg" className="w-full sm:w-auto" disabled={disabled || submit.pending || scriptedWait}>
+            {submit.pending || scriptedWait ? (
               <>
-                <Loader2 className="animate-spin" /> {phase === "evaluating" ? "Evaluating…" : mock ? "Uploading…" : "Uploading securely…"}
+                <Loader2 className="animate-spin" /> {phase === "evaluating" ? "Evaluating submission…" : mock ? "Uploading…" : "Uploading securely…"}
               </>
             ) : disabled ? (
               "Evaluation in progress…"
@@ -628,4 +689,31 @@ function EvidenceForm({ invoiceId, hasPrevious, disabled, criteria }: { invoiceI
 export default function FreelancerInvoicePage() {
   const { id } = useParams<{ id: string }>()
   return <RoleGate role="freelancer">{(session) => <Detail session={session} invoiceId={id} />}</RoleGate>
+}
+
+/** The scripted calculator result shown instantly in the demo. Clearly labelled; the saved server evaluation is what pays. */
+function InstantDemoResult({ fileName, criteria }: { fileName: string; criteria: AcceptanceCriterion[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle>Evaluation: PASSED</CardTitle>
+          <SimulatedTag>AI Evaluation</SimulatedTag>
+        </div>
+        <CardDescription>{fileName}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p>
+          Score <span className="text-2xl font-semibold tabular-nums">95</span>/100 · pass threshold 80/100 · advance eligible: <strong>YES</strong>
+        </p>
+        <ul className="space-y-1">
+          {criteria.map((c, i) => (
+            <li key={i} className="flex gap-2">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden /> <span>{c.text}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
 }

@@ -30,7 +30,7 @@ import { as } from "./db"
 import type { FakeObjectStore } from "./evidence"
 
 const INVOICE_SQL =
-  "select id, chain_id::int as chain_id, contract_address, token_address, invoice_id::text as invoice_id, client_address, freelancer_address, amount::text as amount, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date::text as due_date, onchain_status, advance_amount::text as advance_amount, chain_synced_at::text as chain_synced_at, created_at::text as created_at from invoices"
+  "select id, chain_id::int as chain_id, contract_address, token_address, invoice_id::text as invoice_id, client_address, freelancer_address, amount::text as amount, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date::text as due_date, onchain_status, advance_amount::text as advance_amount, advance_share_bps, chain_synced_at::text as chain_synced_at, created_at::text as created_at from invoices"
 const SUB_SQL =
   "select id, invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size::int as file_size, mime_type, note, funding_verified_onchain, repository_url, commit_sha, created_at::text as created_at from submissions"
 const EVAL_SQL =
@@ -81,6 +81,13 @@ export function createPgBackendDb(db: PGlite): BackendDb {
       return (await q<SubmissionData>(`${SUB_SQL} where invoice_uuid = $1 order by created_at desc, id desc`, [id])).rows
     },
     getSubmission: (id) => one<SubmissionData>(`${SUB_SQL} where id = $1`, [id]),
+    async insertScriptedDemoSubmission(r) {
+      const row = await one<{ id: string }>(
+        "insert into submissions (invoice_uuid, freelancer_user_id, freelancer_address, storage_path, file_name, file_size, mime_type, note) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id",
+        [r.invoice_uuid, r.freelancer_user_id, r.freelancer_address, r.storage_path, r.file_name, r.file_size, r.mime_type, r.note]
+      )
+      return (await one<SubmissionData>(`${SUB_SQL} where id = $1`, [row!.id]))!
+    },
     async listEvaluations(id) {
       return (await q<EvaluationData>(`${EVAL_SQL} where invoice_uuid = $1 order by created_at desc, id desc`, [id])).rows
     },
@@ -160,8 +167,8 @@ export function createPgBackendDb(db: PGlite): BackendDb {
     },
     async registerInvoice(a) {
       const r = await one<{ o_id: string; o_created: boolean }>(
-        "select * from public.register_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13::date,$14,$15,$16,$17)",
-        [a.chainId, a.contractAddress, a.tokenAddress, a.invoiceId, a.client, a.freelancer, a.amount, a.criteriaHash, a.canonical, JSON.stringify(a.criteria), a.title, a.description, a.dueDate, a.createTxHash, a.userId, a.status, a.blockNumber]
+        "select * from public.register_invoice($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13::date,$14,$15,$16,$17,$18)",
+        [a.chainId, a.contractAddress, a.tokenAddress, a.invoiceId, a.client, a.freelancer, a.amount, a.criteriaHash, a.canonical, JSON.stringify(a.criteria), a.title, a.description, a.dueDate, a.createTxHash, a.userId, a.status, a.blockNumber, a.advanceShareBps]
       )
       return { id: r!.o_id, created: r!.o_created }
     },

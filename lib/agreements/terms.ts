@@ -11,7 +11,7 @@ import type { AgreementTerms, PartyRole, WorkAgreement } from "./types"
  */
 
 export const TERMS_ENCODING_VERSION = 1
-/** The platform's early-advance percentage (CLAUDE.md: floor(amount * 90 / 100)). Not negotiable per agreement. */
+/** The platform's early-advance CEILING: no advance exceeds 90% of the invoice. The client's slider (50-100% of this) is set on the invoice, not in the agreement terms. */
 export const EARLY_ADVANCE_PERCENT = 90
 
 export const LIMITS = {
@@ -127,7 +127,7 @@ export function validateTerms(terms: AgreementTerms, now?: string): string[] {
     else total = BigInt(pay.totalAmount)
     if (!pay.escrow || pay.escrow.fullAmountUpfront !== true) p.push("The full amount must be escrowed up front.")
     if (!pay.earlyAdvance || typeof pay.earlyAdvance.enabled !== "boolean" || pay.earlyAdvance.percent !== EARLY_ADVANCE_PERCENT) {
-      p.push(`The early advance must state whether it is enabled and is fixed at ${EARLY_ADVANCE_PERCENT}%.`)
+      p.push(`The early advance must state whether it is enabled and has the platform ceiling of ${EARLY_ADVANCE_PERCENT}% of the invoice (the client's advance rate can only lower it, and is set on the invoice itself).`)
     }
   }
 

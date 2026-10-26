@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
 import { AgreementDraftPanel, type AcceptedDraft } from "@/components/duely/agreement-draft-panel"
 import { RoleGate } from "@/components/duely/role-gate"
@@ -17,8 +18,8 @@ import { useAction, useRepository } from "@/hooks/use-duely"
 import { TxProgressPanel, useTxProgress } from "@/components/duely/tx-progress"
 import { ACTORS, nameForWallet } from "@/lib/mocks/actors"
 import type { Address } from "@/lib/frontend/domain"
-import { advanceFor, parseTokenInput, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
-import { advanceFeeFor, fundingCopy } from "@/lib/frontend/protocol-copy"
+import { advanceFor, advancePercentOfInvoice, DEFAULT_ADVANCE_SHARE_BPS, FEE_PERCENT_OF_INVOICE, MAX_ADVANCE_SHARE_BPS, MIN_ADVANCE_SHARE_BPS, parseTokenInput, sliderPercent, tokenDisplay, tokenNotice } from "@/lib/frontend/token"
+import { advanceFeeFor, fundingCopy, v2Active } from "@/lib/frontend/protocol-copy"
 
 interface CriterionDraft {
   key: number
@@ -40,6 +41,9 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
   const [amountText, setAmountText] = React.useState(live ? "1" : "1000")
   const [description, setDescription] = React.useState("")
   const [dueDate, setDueDate] = React.useState("")
+  // The advance rate (the slider) is only adjustable on the vault protocol; the V1 contracts always advance the 90% ceiling.
+  const adjustableAdvance = v2Active()
+  const [advanceShareBps, setAdvanceShareBps] = React.useState(DEFAULT_ADVANCE_SHARE_BPS)
   const [criteria, setCriteria] = React.useState<CriterionDraft[]>([
     { key: 1, text: "", mandatory: true },
     { key: 2, text: "", mandatory: true },
@@ -68,7 +72,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
     if (!title.trim()) e.title = "Give the invoice a short title."
     if (!/^0x[0-9a-fA-F]{40}$/.test(freelancer.trim())) e.freelancer = "Enter a valid 0x wallet address (42 characters)."
     else if (freelancer.trim().toLowerCase() === clientWallet.toLowerCase()) e.freelancer = "Use a different wallet for the freelancer. The escrow contract doesn't allow one wallet to be both parties on the same invoice. With this wallet you can still switch between the Client and Freelancer dashboards for different invoices."
-    if (!amount || BigInt(amount) <= BigInt(0)) e.amount = "Enter an amount greater than zero, such as 1000 or 250.5."
+    if (!amount || BigInt(amount) <= BigInt(0)) e.amount = "Enter an amount greater than zero, such as 1 or 250.5."
     if (!description.trim()) e.description = "Describe the work so both sides agree on scope."
     const filled = criteria.filter((c) => c.text.trim())
     if (filled.length === 0) e.criteria = "Add at least one acceptance criterion."
@@ -113,6 +117,7 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
       amount,
       description,
       dueDate: dueDate || undefined,
+      advanceShareBps,
       criteria: criteria.filter((c) => c.text.trim()).map((c) => ({ text: c.text, mandatory: c.mandatory })),
     })
     if (res.ok) {
@@ -147,9 +152,9 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Possible 90% advance</dt>
+                <dt className="text-muted-foreground">Possible advance ({sliderPercent(advanceShareBps)}% rate = {advancePercentOfInvoice(advanceShareBps)} of the invoice)</dt>
                 <dd className="mt-0.5">
-                  <Amount value={advanceFor(amount)} /> <span className="text-muted-foreground">from {fundingCopy().source}, if requested</span>
+                  <Amount value={advanceFor(amount, advanceShareBps)} /> <span className="text-muted-foreground">from {fundingCopy().source}, if requested</span>
                 </dd>
               </div>
               {dueDate && (
@@ -272,9 +277,38 @@ function NewInvoice({ clientWallet }: { clientWallet: Address }) {
             </div>
             {amount && BigInt(amount) > BigInt(0) && (
               <p className="text-sm text-muted-foreground">
-                If the freelancer requests an advance, <Amount value={advanceFor(amount)} /> (90%, rounded down) is paid from {fundingCopy().source}.{fundingCopy().pull ? <> At settlement the vault is repaid that amount plus a <Amount value={advanceFeeFor(amount)} /> financing fee out of the invoice.</> : null}
+                If the freelancer requests an advance, <Amount value={advanceFor(amount, advanceShareBps)} /> ({advancePercentOfInvoice(advanceShareBps)} of the invoice, rounded down) is paid from {fundingCopy().source}.{fundingCopy().pull ? <> At settlement the vault is repaid that amount plus a <Amount value={advanceFeeFor(amount)} /> financing fee out of the invoice.</> : null}
               </p>
             )}
+            {adjustableAdvance ? (
+              <div className="space-y-3 rounded-lg border p-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <Label htmlFor="advance-rate">Advance rate</Label>
+                  <span className="text-lg font-semibold tabular-nums" aria-live="polite">{sliderPercent(advanceShareBps)}%</span>
+                </div>
+                <Slider
+                  id="advance-rate"
+                  min={MIN_ADVANCE_SHARE_BPS}
+                  max={MAX_ADVANCE_SHARE_BPS}
+                  step={100}
+                  value={advanceShareBps}
+                  onChange={(e) => setAdvanceShareBps(Number(e.target.value))}
+                  aria-valuetext={`${sliderPercent(advanceShareBps)}% advance rate`}
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{sliderPercent(MIN_ADVANCE_SHARE_BPS)}% (minimum)</span>
+                  <span>{sliderPercent(MAX_ADVANCE_SHARE_BPS)}%</span>
+                </div>
+                {amount && BigInt(amount) > BigInt(0) && (
+                  <p className="text-sm">
+                    The freelancer can draw <Amount value={advanceFor(amount, advanceShareBps)} /> ({advancePercentOfInvoice(advanceShareBps)} of the invoice) early, funded by the liquidity vault, before you approve.
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  The rate can&apos;t go below {sliderPercent(MIN_ADVANCE_SHARE_BPS)}%, so the freelancer always gets a meaningful share of their pay early. A fixed {FEE_PERCENT_OF_INVOICE}% of the escrowed amount is paid to the vault and its liquidity providers as a financing fee, whatever rate you pick. So the top of the slider, 100%, advances 90% of the escrow, not 100%. The rate is fixed once the invoice is created.
+                </p>
+              </div>
+            ) : null}
             <Field
               label="Description"
               error={errors.description}

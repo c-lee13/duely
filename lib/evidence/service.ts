@@ -339,6 +339,8 @@ export async function registerSubmission(
   deps: EvidenceDeps,
   input: { userId: string | null; invoiceId: string; storagePath: string; fileName?: string; note?: string }
 ): Promise<RegisteredSubmission> {
+  const t0 = Date.now()
+  const step = (label: string) => console.info(`[submit-evidence] register: ${label} (+${Date.now() - t0}ms)`)
   const userId = requireUser(input.userId)
 
   // The path comes from the browser, so treat it as hostile: it must be exactly a path we could have issued
@@ -348,6 +350,7 @@ export async function registerSubmission(
     throw new EvidenceError("INVALID_PATH", "That upload doesn't belong to this invoice and account.")
   }
 
+  step("path ok; loading invoice and party")
   const ctx = await loadPartyContext(deps, userId, input.invoiceId)
   requireFreelancer(ctx)
 
@@ -355,17 +358,20 @@ export async function registerSubmission(
   const existing = await deps.db.findSubmissionByPath(input.storagePath)
   if (existing) return { submission: existing, duplicate: true }
 
+  step("checking funding on-chain")
   const { fundingVerifiedOnchain } = await checkEligibility(deps, ctx.invoice)
   if ((await deps.db.countSubmissions(ctx.invoice.id)) >= MAX_SUBMISSIONS_PER_INVOICE) {
     throw new EvidenceError("SUBMISSION_LIMIT", `An invoice can have at most ${MAX_SUBMISSIONS_PER_INVOICE} submissions.`)
   }
 
+  step("funding ok; counted submissions")
   const reject = async (code: EvidenceErrorCode, message: string): Promise<never> => {
     // Only objects inside this user's own folder for this invoice can reach here (path was parsed above).
     await deps.objects.remove(input.storagePath).catch(() => undefined)
     throw new EvidenceError(code, message)
   }
 
+  step("reading stored object")
   const head = await deps.objects.head(input.storagePath)
   if (!head) throw new EvidenceError("UPLOAD_NOT_FOUND", "The file hasn't finished uploading. Upload it again.")
   if (head.size <= 0) return reject("INVALID_FILE", "The file is empty.")

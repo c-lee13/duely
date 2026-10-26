@@ -80,7 +80,14 @@ contract InvoiceAdvanceV2Test is Test {
 
     function _create(uint256 amount) internal returns (uint256 id) {
         vm.prank(client);
-        id = escrow.createInvoice(freelancer, amount, META);
+        id = escrow.createInvoice(freelancer, amount, META, 10_000);
+    }
+
+    function _fundedShare(uint256 amount, uint256 share) internal returns (uint256 id) {
+        vm.prank(client);
+        id = escrow.createInvoice(freelancer, amount, META, share);
+        vm.prank(client);
+        escrow.fundInvoice(id);
     }
 
     function _funded(uint256 amount) internal returns (uint256 id) {
@@ -127,68 +134,69 @@ contract InvoiceAdvanceV2Test is Test {
         assertEq(s0.vault, 4000 * E18);
 
         // 1. Client escrows 100% (1,000).
-        uint256 id = _funded(1000 * E18);
+        uint256 id = _fundedShare(1000 * E18, 5_000); // client chose a 50% slider
         Balances memory s1 = _bal();
         assertEq(s1.client, 9000 * E18);
         assertEq(s1.escrow, 1000 * E18);
         assertEq(escrow.totalEscrow(), 1000 * E18);
         assertEq(_sum(s1), total0);
 
-        // 2. Evaluator approves; the VAULT pays the freelancer 900. Escrow is untouched.
+        // 2. Evaluator approves; the VAULT pays the freelancer 450 (50% of the 90% ceiling). Escrow is untouched.
         vm.expectEmit(true, true, false, true, address(escrow));
-        emit IInvoiceAdvanceV2.AdvancePaid(id, freelancer, 900 * E18, 30 * E18, EVAL);
+        emit IInvoiceAdvanceV2.AdvancePaid(id, freelancer, 450 * E18, 100 * E18, EVAL);
         vm.prank(evaluator);
         escrow.approveAdvance(id, EVAL);
         Balances memory s2 = _bal();
-        assertEq(s2.freelancer, 900 * E18);
-        assertEq(s2.vault, 3100 * E18);
+        assertEq(s2.freelancer, 450 * E18);
+        assertEq(s2.vault, 3550 * E18);
         assertEq(s2.escrow, 1000 * E18, "client escrow untouched");
-        assertEq(vault.outstandingPrincipal(), 900 * E18);
+        assertEq(vault.outstandingPrincipal(), 450 * E18);
         assertEq(vault.totalAssets(), 4000 * E18, "advance does not change NAV");
         assertEq(_sum(s2), total0);
         IInvoiceAdvanceV2.Invoice memory inv = escrow.getInvoice(id);
-        assertEq(inv.advanceAmount, 900 * E18);
-        assertEq(inv.advanceFee, 30 * E18, "fee fixed at funding");
+        assertEq(inv.advanceAmount, 450 * E18);
+        assertEq(inv.advanceShareBps, 5_000);
+        assertEq(inv.advanceFee, 100 * E18, "fee fixed at funding");
         assertEq(inv.evaluationHash, EVAL);
         assertEq(uint8(inv.status), uint8(IInvoiceAdvanceV2.InvoiceStatus.Advanced));
 
-        // 3. Client approves: the vault is repaid 930 (900 + 30); the freelancer's remaining 70 is
+        // 3. Client approves: the vault is repaid 550 (450 + 100 fee); the freelancer's remaining 450 is
         // CREDITED and stays reserved in the escrow (pull payment).
         vm.expectEmit(true, false, false, true, address(escrow));
-        emit IInvoiceAdvanceV2.InvoiceSettled(id, 900 * E18, 30 * E18, 70 * E18);
+        emit IInvoiceAdvanceV2.InvoiceSettled(id, 450 * E18, 100 * E18, 450 * E18);
         vm.expectEmit(true, true, false, true, address(escrow));
-        emit IInvoiceAdvanceV2.ProceedsCredited(id, freelancer, 70 * E18);
+        emit IInvoiceAdvanceV2.ProceedsCredited(id, freelancer, 450 * E18);
         vm.prank(client);
         escrow.approveCompletion(id);
         Balances memory s3 = _bal();
         assertEq(s3.client, 9000 * E18, "client paid 1,000 total");
-        assertEq(s3.freelancer, 900 * E18, "nothing pushed to the freelancer yet");
-        assertEq(s3.vault, 4030 * E18, "vault 3100 + 930");
-        assertEq(s3.escrow, 70 * E18, "the 70 stays reserved in the escrow");
+        assertEq(s3.freelancer, 450 * E18, "nothing pushed to the freelancer yet");
+        assertEq(s3.vault, 4100 * E18, "vault 3550 + 550");
+        assertEq(s3.escrow, 450 * E18, "the 450 stays reserved in the escrow");
         assertEq(escrow.totalEscrow(), 0);
-        assertEq(escrow.claimable(freelancer), 70 * E18);
-        assertEq(escrow.totalClaimable(), 70 * E18);
+        assertEq(escrow.claimable(freelancer), 450 * E18);
+        assertEq(escrow.totalClaimable(), 450 * E18);
         assertEq(_sum(s3), total0, "exact conservation");
         assertEq(vault.outstandingPrincipal(), 0);
-        assertEq(vault.totalAssets(), 4030 * E18, "NAV +30");
-        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(vault.totalAssets(), 4100 * E18, "NAV +100");
+        assertEq(vault.totalFeesEarned(), 100 * E18);
         assertEq(vault.totalRealizedLosses(), 0);
         assertEq(uint8(vault.getAdvance(id).status), uint8(IDuelyVault.AdvanceStatus.Repaid));
         assertEq(uint8(_status(id)), uint8(IInvoiceAdvanceV2.InvoiceStatus.Settled));
 
         // 4. Anyone may trigger the claim; the money still goes to the freelancer.
         vm.expectEmit(true, true, false, true, address(escrow));
-        emit IInvoiceAdvanceV2.ProceedsClaimed(freelancer, stranger, 70 * E18);
+        emit IInvoiceAdvanceV2.ProceedsClaimed(freelancer, stranger, 450 * E18);
         vm.prank(stranger);
         escrow.claim(freelancer);
         Balances memory s4 = _bal();
-        assertEq(s4.freelancer, 970 * E18, "900 + 70");
+        assertEq(s4.freelancer, 900 * E18, "450 + 450");
         assertEq(s4.escrow, 0);
         assertEq(escrow.totalClaimable(), 0);
         assertEq(_sum(s4), total0);
-        // LP value: +0.75% pro rata.
-        assertApproxEqAbs(_lpValue(lp1), 3022.5e18, 2);
-        assertApproxEqAbs(_lpValue(lp2), 1007.5e18, 2);
+        // LP value: +2.5% pro rata.
+        assertApproxEqAbs(_lpValue(lp1), 3075e18, 2);
+        assertApproxEqAbs(_lpValue(lp2), 1025e18, 2);
     }
 
     function test_lifecycle_approval_withoutAdvance_fullAmountToFreelancer_noFee() public {
@@ -246,18 +254,17 @@ contract InvoiceAdvanceV2Test is Test {
         vm.expectEmit(true, false, false, true, address(escrow));
         emit IInvoiceAdvanceV2.DisputeResolved(id, true, 0);
         vm.expectEmit(true, false, false, true, address(escrow));
-        emit IInvoiceAdvanceV2.InvoiceSettled(id, 900 * E18, 30 * E18, 70 * E18);
+        emit IInvoiceAdvanceV2.InvoiceSettled(id, 900 * E18, 100 * E18, 0);
         vm.prank(operator);
-        escrow.resolveDispute(id, true);
-        escrow.claim(freelancer);
+        escrow.resolveDispute(id, true); // slider 100%: advance + fee consume the invoice, nothing to claim
 
         Balances memory s = _bal();
         assertEq(s.client, 9000 * E18);
-        assertEq(s.freelancer, 970 * E18);
-        assertEq(s.vault, 4030 * E18);
+        assertEq(s.freelancer, 900 * E18);
+        assertEq(s.vault, 4100 * E18);
         assertEq(s.escrow, 0);
         assertEq(_sum(s), total0);
-        assertEq(vault.totalAssets(), 4030 * E18);
+        assertEq(vault.totalAssets(), 4100 * E18);
         assertEq(vault.totalRealizedLosses(), 0);
         assertEq(uint8(_status(id)), uint8(IInvoiceAdvanceV2.InvoiceStatus.Settled));
     }
@@ -437,7 +444,7 @@ contract InvoiceAdvanceV2Test is Test {
         vm.expectRevert();
         escrow.resolveDispute(id, true);
         vm.expectRevert(IDuelyVault.NotEscrow.selector);
-        vault.fundAdvance(99, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        vault.fundAdvance(99, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         vm.expectRevert(IDuelyVault.NotEscrow.selector);
         vault.recordRepayment(id);
         vm.expectRevert(IDuelyVault.NotEscrow.selector);
@@ -514,19 +521,19 @@ contract InvoiceAdvanceV2Test is Test {
     function test_createInvoice_validation() public {
         vm.startPrank(client);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidAddress.selector);
-        escrow.createInvoice(address(0), 1, META);
+        escrow.createInvoice(address(0), 1, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidAddress.selector);
-        escrow.createInvoice(address(vault), 1, META);
+        escrow.createInvoice(address(vault), 1, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidAddress.selector);
-        escrow.createInvoice(address(escrow), 1, META);
+        escrow.createInvoice(address(escrow), 1, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidAddress.selector);
-        escrow.createInvoice(address(rlusd), 1, META);
+        escrow.createInvoice(address(rlusd), 1, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidInvoiceParties.selector);
-        escrow.createInvoice(client, 1, META);
+        escrow.createInvoice(client, 1, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidAmount.selector);
-        escrow.createInvoice(freelancer, 0, META);
+        escrow.createInvoice(freelancer, 0, META, 10_000);
         vm.expectRevert(IInvoiceAdvanceV2.InvalidHash.selector);
-        escrow.createInvoice(freelancer, 1, bytes32(0));
+        escrow.createInvoice(freelancer, 1, bytes32(0), 10_000);
         vm.stopPrank();
         vm.prank(evaluator);
         vm.expectRevert(abi.encodeWithSelector(IInvoiceAdvanceV2.InvoiceNotFound.selector, 99));
@@ -597,7 +604,7 @@ contract InvoiceAdvanceV2Test is Test {
 
         vm.prank(client);
         escrow.approveCompletion(id); // retry succeeds
-        assertEq(vault.totalAssets(), 4030 * E18);
+        assertEq(vault.totalAssets(), 4100 * E18);
     }
 
     /// @dev Pull payments: the refund ruling no longer moves tokens, so an issuer pause cannot block it or
@@ -641,7 +648,7 @@ contract InvoiceAdvanceV2Test is Test {
         tok.mint(client, 1000 * E18);
         vm.startPrank(client);
         tok.approve(address(e), type(uint256).max);
-        uint256 id = e.createInvoice(freelancer, 1000 * E18, META);
+        uint256 id = e.createInvoice(freelancer, 1000 * E18, META, 10_000);
         tok.setTax(true);
         vm.expectRevert(IInvoiceAdvanceV2.UnsupportedTokenBehavior.selector);
         e.fundInvoice(id);
@@ -666,7 +673,7 @@ contract InvoiceAdvanceV2Test is Test {
         vm.prank(operator);
         escrow.resolveDispute(b, false);
 
-        assertEq(vault.totalAssets(), 4000 * E18 + 30 * E18 - 900 * E18);
+        assertEq(vault.totalAssets(), 4000 * E18 + 100 * E18 - 900 * E18);
         assertEq(vault.outstandingPrincipal(), 0);
         assertEq(vault.maxRedeem(lp1), 0, "LPs stay locked until unpause");
     }
@@ -676,18 +683,18 @@ contract InvoiceAdvanceV2Test is Test {
     function test_multiLp_profitThenLoss_distributedProRata() public {
         uint256 ok = _advanced(1000 * E18);
         vm.prank(client);
-        escrow.approveCompletion(ok); // NAV 4030
+        escrow.approveCompletion(ok); // NAV 4100
         uint256 bad = _advanced(1000 * E18);
         vm.prank(client);
         escrow.raiseDispute(bad);
         vm.prank(operator);
-        escrow.resolveDispute(bad, false); // NAV 3130
+        escrow.resolveDispute(bad, false); // NAV 3200
 
-        assertEq(vault.totalAssets(), 3130 * E18);
-        assertApproxEqAbs(_lpValue(lp1), 2347.5e18, 3);
-        assertApproxEqAbs(_lpValue(lp2), 782.5e18, 3);
+        assertEq(vault.totalAssets(), 3200 * E18);
+        assertApproxEqAbs(_lpValue(lp1), 2400e18, 3);
+        assertApproxEqAbs(_lpValue(lp2), 800e18, 3);
         assertApproxEqRel(_lpValue(lp1), 3 * _lpValue(lp2), 1e9, "still 3:1");
-        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(vault.totalFeesEarned(), 100 * E18);
         assertEq(vault.totalRealizedLosses(), 900 * E18);
     }
 
@@ -696,10 +703,10 @@ contract InvoiceAdvanceV2Test is Test {
         address lp3 = makeAddr("lp3");
         _lp(lp3, 1000 * E18); // enters at the par price, NAV 5000
         vm.prank(client);
-        escrow.approveCompletion(id); // +30 across 5000 of NAV
-        assertApproxEqAbs(_lpValue(lp3), 1006 * E18, 3);
-        assertApproxEqAbs(_lpValue(lp1), 3018 * E18, 3);
-        assertApproxEqAbs(_lpValue(lp2), 1006 * E18, 3);
+        escrow.approveCompletion(id); // +100 across 5000 of NAV
+        assertApproxEqAbs(_lpValue(lp3), 1020 * E18, 3);
+        assertApproxEqAbs(_lpValue(lp1), 3060 * E18, 3);
+        assertApproxEqAbs(_lpValue(lp2), 1020 * E18, 3);
     }
 
     function test_concurrentAdvances_settleIndependently() public {
@@ -720,11 +727,10 @@ contract InvoiceAdvanceV2Test is Test {
         escrow.approveCompletion(c);
 
         assertEq(vault.outstandingPrincipal(), 0);
-        assertEq(vault.totalAssets(), 4000 * E18 + 60 * E18 - 900 * E18);
+        assertEq(vault.totalAssets(), 4000 * E18 + 200 * E18 - 900 * E18);
         assertEq(escrow.totalEscrow(), 0);
         assertEq(rlusd.balanceOf(address(escrow)), escrow.totalClaimable(), "only credits remain");
-        escrow.claim(freelancer);
-        escrow.claim(client);
+        escrow.claim(client); // the freelancer has nothing to claim at a 100% slider
         assertEq(rlusd.balanceOf(address(escrow)), 0);
         assertEq(rlusd.balanceOf(address(vault)), vault.totalAssets(), "all principal back as cash");
     }
@@ -732,21 +738,47 @@ contract InvoiceAdvanceV2Test is Test {
     // ------------------------------------------------------------------ quote and rounding
 
     function test_quoteAdvance() public view {
-        (uint256 adv, uint256 fee, uint256 repay, uint256 rem) = escrow.quoteAdvance(1000 * E18);
+        (uint256 adv, uint256 fee, uint256 repay, uint256 rem) = escrow.quoteAdvance(1000 * E18, 10_000);
         assertEq(adv, 900 * E18);
-        assertEq(fee, 30 * E18);
-        assertEq(repay, 930 * E18);
-        assertEq(rem, 70 * E18);
-        (adv, fee, repay, rem) = escrow.quoteAdvance(33);
+        assertEq(fee, 100 * E18);
+        assertEq(repay, 1000 * E18);
+        assertEq(rem, 0);
+        (adv, fee, repay, rem) = escrow.quoteAdvance(33, 10_000);
         assertEq(adv, 29);
-        assertEq(fee, 0);
-        assertEq(rem, 4);
-        (adv, fee, repay, rem) = escrow.quoteAdvance(0);
+        assertEq(fee, 3);
+        assertEq(rem, 1);
+        (adv, fee, repay, rem) = escrow.quoteAdvance(0, 10_000);
         assertEq(adv + fee + repay + rem, 0);
     }
 
+    function test_quoteAdvance_followsTheClientsSlider_feeStaysFixed() public view {
+        uint256[3] memory shares = [uint256(5_000), 7_500, 10_000];
+        uint256[3] memory advances = [uint256(450 * E18), 675 * E18, 900 * E18];
+        for (uint256 i = 0; i < 3; i++) {
+            (uint256 adv, uint256 fee, uint256 repay, uint256 rem) =
+                escrow.quoteAdvance(1000 * E18, shares[i]);
+            assertEq(adv, advances[i]);
+            assertEq(fee, 100 * E18, "fee is 10% of the invoice at every slider value");
+            assertEq(repay, adv + fee);
+            assertEq(rem, 1000 * E18 - adv - fee);
+        }
+    }
+
+    function test_createInvoice_rejectsSliderOutsideTheAllowedRange() public {
+        vm.startPrank(client);
+        vm.expectRevert(IInvoiceAdvanceV2.InvalidAdvanceShare.selector);
+        escrow.createInvoice(freelancer, 1000 * E18, META, 4_999);
+        vm.expectRevert(IInvoiceAdvanceV2.InvalidAdvanceShare.selector);
+        escrow.createInvoice(freelancer, 1000 * E18, META, 10_001);
+        vm.expectRevert(IInvoiceAdvanceV2.InvalidAdvanceShare.selector);
+        escrow.createInvoice(freelancer, 1000 * E18, META, 0);
+        escrow.createInvoice(freelancer, 1000 * E18, META, 5_000);
+        escrow.createInvoice(freelancer, 1000 * E18, META, 10_000);
+        vm.stopPrank();
+    }
+
     function testFuzz_quoteConservesAmount(uint128 amount) public view {
-        (uint256 adv, uint256 fee, uint256 repay, uint256 rem) = escrow.quoteAdvance(amount);
+        (uint256 adv, uint256 fee, uint256 repay, uint256 rem) = escrow.quoteAdvance(amount, 10_000);
         assertEq(adv + fee + rem, amount);
         assertEq(repay, adv + fee);
         assertLe(repay, amount);
@@ -836,7 +868,7 @@ contract InvoiceAdvanceV2Test is Test {
         uint256 nav0 = vault.totalAssets();
 
         uint256 id = _funded(amount);
-        (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(amount);
+        (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(amount, 10_000);
         bool advanced;
         if (advance && adv > 0) {
             vm.prank(evaluator);

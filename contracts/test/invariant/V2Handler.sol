@@ -368,7 +368,7 @@ contract V2Handler is Test {
         (bool ok,) = _call(
             c,
             address(escrow),
-            abi.encodeCall(escrow.createInvoice, (f, amount, keccak256(abi.encode(id))))
+            abi.encodeCall(escrow.createInvoice, (f, amount, keccak256(abi.encode(id)), 10_000))
         );
         _expect("createInvoice", ok, true);
         if (ok) {
@@ -426,7 +426,7 @@ contract V2Handler is Test {
 
     function _tryAdvance(uint256 id) internal {
         GI storage g = gi[id];
-        (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(g.amount);
+        (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(g.amount, 10_000);
         // The vault's own view of what it will accept; the end-state checks below do not trust it.
         bool exp = adv > 0 && vault.maxAdvanceNow() >= adv && !token.paused()
             && !token.blacklisted(g.freelancer);

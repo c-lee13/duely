@@ -3,7 +3,7 @@ import type { ZodType } from "zod"
 import { errorResponse, rejectCrossOrigin, toErrorResponse } from "@/lib/auth/http"
 import { getAdvanceStatus, requestAdvance } from "./advances"
 import { listOperatorInvoices } from "./operator"
-import { evaluateSubmission } from "./evaluation"
+import { evaluateSubmission, type EvaluateResult } from "./evaluation"
 import { getInvoiceDetail, listInvoices, registerInvoice } from "./invoices"
 import type { BackendDeps } from "./ports"
 import { AdvanceBody, AdvanceRefParam, CreateInvoiceBody, EvaluateBody, IdempotencyKey, InvoiceRefParam } from "./schemas"
@@ -65,6 +65,28 @@ export async function handleGetInvoice(_request: Request, ctx: HandlerContext, p
 }
 
 /** POST /api/evaluate */
+/** EvaluationResult (CLAUDE.md §6) plus the audit metadata persisted with it. */
+export function evaluationBody(r: EvaluateResult) {
+  const e = r.evaluation
+  return {
+    invoiceId: r.invoiceId,
+    submissionId: e.submissionId,
+    score: e.score,
+    passed: e.passed,
+    criteriaResults: e.criteriaResults?.map(({ criterion, passed, reason }) => ({ criterion, passed, reason })) ?? [],
+    summary: e.summary,
+    evaluationId: e.evaluationId,
+    criteriaHash: e.criteriaHash,
+    criteriaVersion: e.criteriaVersion,
+    model: e.model,
+    promptVersion: e.promptVersion,
+    passRule: e.passRule,
+    simulated: e.simulated,
+    evaluatedAt: e.evaluatedAt,
+    duplicate: r.duplicate,
+  }
+}
+
 export async function handleEvaluate(request: Request, ctx: HandlerContext): Promise<Response> {
   const blocked = rejectCrossOrigin(request)
   if (blocked) return blocked
@@ -72,28 +94,7 @@ export async function handleEvaluate(request: Request, ctx: HandlerContext): Pro
   if ("response" in body) return body.response
   try {
     const r = await evaluateSubmission(ctx.deps(), { userId: await ctx.userId(), submissionId: body.data.submissionId })
-    const e = r.evaluation
-    // EvaluationResult (CLAUDE.md §6) plus the audit metadata persisted with it.
-    return ok(
-      {
-        invoiceId: r.invoiceId,
-        submissionId: e.submissionId,
-        score: e.score,
-        passed: e.passed,
-        criteriaResults: e.criteriaResults?.map(({ criterion, passed, reason }) => ({ criterion, passed, reason })) ?? [],
-        summary: e.summary,
-        evaluationId: e.evaluationId,
-        criteriaHash: e.criteriaHash,
-        criteriaVersion: e.criteriaVersion,
-        model: e.model,
-        promptVersion: e.promptVersion,
-        passRule: e.passRule,
-        simulated: e.simulated,
-        evaluatedAt: e.evaluatedAt,
-        duplicate: r.duplicate,
-      },
-      r.duplicate ? 200 : 201
-    )
+    return ok(evaluationBody(r), r.duplicate ? 200 : 201)
   } catch (e) {
     return toErrorResponse(e)
   }

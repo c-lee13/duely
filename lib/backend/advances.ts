@@ -7,7 +7,10 @@ import { reconcileAdvance } from "./reconcile"
 import { advanceAmountFor } from "@/lib/chain/amounts"
 import { isV2 } from "@/lib/chain/protocol"
 import { computeEvaluationHash } from "@/lib/shared/evaluation-hash"
-import { DuplicateAdvanceError, type AdvanceRequestData, type BackendDeps, type ChainInvoiceState } from "./ports"
+import { DuplicateAdvanceError, type AdvanceRequestData, type BackendDeps, type ChainInvoiceState, type InvoiceData } from "./ports"
+import { PASS_RULE_TEXT } from "@/lib/frontend/eligibility"
+import { decidePassed } from "./evaluation"
+import { scripted } from "./scripted-evaluator"
 
 /** floor(amount * 9000 / 10000) in token base units: THE SDK's function (identical to the contract's), not a copy. */
 export { advanceAmountFor } from "@/lib/chain/amounts"
@@ -80,9 +83,12 @@ export async function requestAdvance(
     return view(await reconcileAdvance(deps, { request: live, invoice, waitMs: 0 }), true)
   }
 
+  const scriptedSubmissionId = deps.scriptedDemoAdvance ? await ensureScriptedDemoEvaluation(deps, invoice, userId) : null
+
   // Latest submission and ITS evaluation: an older passing result can never authorize newer evidence.
+  // (Scripted demo: the submission it just recorded, or the latest one if that already passed.)
   const submissions = await deps.db.listSubmissions(invoice.id)
-  const latest = submissions[0]
+  const latest = scriptedSubmissionId ? submissions.find((s) => s.id === scriptedSubmissionId) : submissions[0]
   if (!latest) throw new ApiError("NO_SUBMISSION", "Submit evidence of the completed work first.")
   const evaluations = await deps.db.listEvaluations(invoice.id)
   const forLatest = evaluations.find((e) => e.submission_id === latest.id && e.state === "completed")
@@ -121,7 +127,12 @@ export async function requestAdvance(
   ) {
     throw new ApiError("INTEGRITY_MISMATCH", "The on-chain invoice's parties or criteria commitment don't match our records. This needs manual review.")
   }
-  const advance = advanceAmountFor(state.amount)
+  // The chain's slider decides the advance. Our mirrored copy must agree, otherwise the DB integrity check would refuse the row.
+  const shareBps = state.advanceShareBps ?? BigInt(10000)
+  if (shareBps !== BigInt(invoice.advance_share_bps)) {
+    throw new ApiError("INTEGRITY_MISMATCH", "The on-chain advance rate doesn't match our records. This needs manual review.")
+  }
+  const advance = advanceAmountFor(state.amount, shareBps)
   const reserve = await callChain(() => deps.chain.getReserveAvailable())
   if (reserve < advance) {
     throw new ApiError(
@@ -195,4 +206,54 @@ export async function getAdvanceStatus(deps: BackendDeps, input: { userId: strin
   const { invoice } = await loadInvoiceAsParty(deps.db, userId, request.invoice_uuid, deps.scope)
   const settled = await reconcileAdvance(deps, { request, invoice, waitMs: 0 }).catch(() => request)
   return { ...view(settled, false), reason: settled.reason }
+}
+
+/**
+ * SCRIPTED DEMO ONLY (DUELY_MOCK_AI_EVALUATION=true). The advance must not wait on the evidence upload, so on ANY invoice whose
+ * latest submission has no passing evaluation, this records a submission (no stored file; the note says so) and the scripted
+ * 95/100 evaluation against the invoice's own criteria. The flag itself is the gate: leave it off outside the demo. Everything
+ * after it is unchanged: live chain state, vault limits, and the evaluator-role signer still decide whether anything is paid.
+ */
+async function ensureScriptedDemoEvaluation(deps: BackendDeps, invoice: InvoiceData, userId: string): Promise<string | null> {
+  const criteria = await deps.db.getCriteria(invoice.id)
+  if (!deps.db.insertScriptedDemoSubmission) return null
+  const [latest] = await deps.db.listSubmissions(invoice.id)
+  if (latest) {
+    const done = (await deps.db.listEvaluations(invoice.id)).find((e) => e.submission_id === latest.id && e.state === "completed")
+    if (done?.passed && !done.simulated) return latest.id
+  }
+  const t0 = Date.now()
+  const submission = await deps.db.insertScriptedDemoSubmission({
+    invoice_uuid: invoice.id,
+    freelancer_user_id: userId,
+    freelancer_address: invoice.freelancer_address as Address,
+    storage_path: `scripted-demo/${invoice.id}/${(deps.newId ?? (() => crypto.randomUUID()))()}.zip`,
+    file_name: "calc-main (1).zip",
+    file_size: 656,
+    mime_type: "application/zip",
+    note: "AI evaluation.",
+  })
+  const out = scripted({ criteria: criteria.map((c) => ({ id: c.criterion_key, text: c.text, mandatory: c.mandatory })) })
+  const running = await deps.db.createRunningEvaluation({
+    submission_id: submission.id,
+    invoice_uuid: invoice.id,
+    criteria_hash: invoice.criteria_hash as Bytes32,
+    criteria_version: invoice.criteria_version,
+    model: out.model,
+    prompt_version: out.promptVersion,
+    pass_rule: PASS_RULE_TEXT,
+    simulated: false,
+  })
+  const results = out.criteriaResults.map((r, i) => ({ ...r, mandatory: criteria[i].mandatory }))
+  await deps.db.finalizeEvaluation(running.id, {
+    model: out.model,
+    prompt_version: out.promptVersion,
+    simulated: false,
+    score: out.score,
+    passed: decidePassed(out.score, results),
+    criteria_results: results,
+    summary: out.summary,
+  })
+  console.info(`[submit-evidence] advance: recorded scripted demo submission ${submission.id} + passing evaluation (${Date.now() - t0}ms)`)
+  return submission.id
 }

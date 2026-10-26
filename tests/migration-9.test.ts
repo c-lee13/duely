@@ -106,8 +106,10 @@ describe("migration 9: safe to apply to a database that already has rows", () =>
       // Build a database at migration 8 exactly like createDb(), then add legacy rows, then apply 9.
       const dir = path.resolve(process.cwd(), "supabase/migrations")
       const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()
-      const nine = files.pop()!
-      assert.match(nine, /000009_dual_token_alignment/)
+      // Everything before migration 9 (later migrations, such as advance_share_bps, are not part of this scenario).
+      const nine = files.find((f) => /000009_dual_token_alignment/.test(f))!
+      assert.ok(nine)
+      files.splice(files.indexOf(nine))
       const full = await createDb()
       await full.close()
       // createDb() already applied 9; replay on a fresh instance up to 8 using its bootstrap by reading helper source.

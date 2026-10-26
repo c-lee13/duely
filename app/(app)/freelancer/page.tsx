@@ -79,7 +79,7 @@ function PaymentRow({ tx, invoice, simulated }: { tx: TransactionRecord; invoice
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">
-          {isAdvance ? `90% advance from ${fundingCopy().short}` : "Settlement payout"}
+          {isAdvance ? `Advance from ${fundingCopy().short}` : "Settlement payout"}
           {tx.invoiceId && <span className="font-normal text-muted-foreground"> · #{tx.invoiceId}</span>}
         </p>
         <p className="text-xs text-muted-foreground">
@@ -107,7 +107,7 @@ function ActionCard({ invoice, offer }: { invoice: InvoiceDetail; offer: "eligib
   const cta =
     step === "request_advance" ? (
       <ButtonLink href={href} size="sm">
-        <Rocket /> Request advance · <Amount value={advanceFor(invoice.amount)} hideSymbol className="text-inherit" />
+        <Rocket /> Request advance · <Amount value={advanceFor(invoice.amount, invoice.advanceShareBps)} hideSymbol className="text-inherit" />
       </ButtonLink>
     ) : step === "submit_evidence" || step === "resubmit" ? (
       <ButtonLink href={href} size="sm">
@@ -244,7 +244,7 @@ function Dashboard({ session }: { session: Session }) {
                 ))}
               </ul>
               <p className="text-xs text-muted-foreground">
-                An advance (90% of the invoice, from {fundingCopy().source}) needs a passing AI evaluation and your
+                An advance (the rate the client chose on each invoice, at most 90% of it, from {fundingCopy().source}) needs a passing AI evaluation and your
                 explicit request. It shows as paid only after it is confirmed.
               </p>
             </section>

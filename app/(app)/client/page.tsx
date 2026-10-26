@@ -42,7 +42,7 @@ const STATUS_ORDER: OnchainInvoiceStatus[] = ["Created", "Funded", "Advanced", "
 const STATUS_HINT: Record<OnchainInvoiceStatus, string> = {
   Created: "Awaiting funding",
   Funded: "In escrow",
-  Advanced: "90% advanced",
+  Advanced: "Advance paid",
   Disputed: "Frozen",
   Settled: "Complete",
   Cancelled: "Cancelled before funding",

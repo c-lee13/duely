@@ -28,7 +28,7 @@ import type {
 import { DomainError } from "@/lib/frontend/errors"
 import { deriveSubmissionStatus } from "@/lib/frontend/eligibility"
 import { mockCriteriaDigest } from "@/lib/frontend/criteria-digest"
-import { advanceFor, formatToken as formatTokenOf, gte, isZero, MOCK_TOKEN, sub, sum, toBig } from "@/lib/frontend/token"
+import { advanceFor, DEFAULT_ADVANCE_SHARE_BPS, MAX_ADVANCE_SHARE_BPS, MIN_ADVANCE_SHARE_BPS, formatToken as formatTokenOf, gte, isZero, MOCK_TOKEN, sub, sum, toBig } from "@/lib/frontend/token"
 
 /** Mock messages always speak in the simulated DEMO token. */
 const formatToken = (amount: string) => formatTokenOf(amount, { token: MOCK_TOKEN })
@@ -175,6 +175,12 @@ export function createInvoice(
   if (input.freelancer.toLowerCase() === caller.toLowerCase()) {
     throw new DomainError("INVALID_INPUT", "The freelancer wallet must differ from the client wallet.")
   }
+  if (
+    input.advanceShareBps !== undefined &&
+    (!Number.isInteger(input.advanceShareBps) || input.advanceShareBps < MIN_ADVANCE_SHARE_BPS || input.advanceShareBps > MAX_ADVANCE_SHARE_BPS)
+  ) {
+    throw new DomainError("INVALID_INPUT", "The advance rate must be between 50% and 100%.")
+  }
   if (input.criteria.length === 0) {
     throw new DomainError("INVALID_INPUT", "Add at least one acceptance criterion.")
   }
@@ -191,6 +197,7 @@ export function createInvoice(
     freelancer: input.freelancer,
     amount: input.amount,
     advanceAmount: "0",
+    advanceShareBps: input.advanceShareBps ?? DEFAULT_ADVANCE_SHARE_BPS,
     criteriaHash: mockCriteriaDigest(criteriaVersion, criteria) as Bytes32,
     onchainStatus: "Created",
     submissionStatus: "NotSubmitted",
@@ -261,7 +268,7 @@ export function approveAdvance(s: MockState, signer: Address, invoiceId: Invoice
   if (invoice.onchainStatus !== "Funded") {
     throw new DomainError("INVALID_STATUS", `An advance can't be paid while the invoice is ${invoice.onchainStatus}.`)
   }
-  const amount = advanceFor(invoice.amount)
+  const amount = advanceFor(invoice.amount, invoice.advanceShareBps)
   if (!gte(s.reserve, amount)) {
     throw new DomainError(
       "INSUFFICIENT_RESERVE",
@@ -280,7 +287,7 @@ export function approveAdvance(s: MockState, signer: Address, invoiceId: Invoice
     at: ctx.at,
     kind: "advance_paid",
     layer: "onchain",
-    title: "90% advance paid from reserve",
+    title: "Advance paid from reserve",
     description: `The platform signer paid the advance to the freelancer from the prefunded reserve. Client escrow stays locked.`,
     amount,
   })

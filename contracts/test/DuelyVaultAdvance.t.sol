@@ -50,7 +50,7 @@ contract DuelyVaultAdvanceTest is Test {
     }
 
     function _fee(uint256 invoiceAmount) internal pure returns (uint256) {
-        return invoiceAmount * 300 / 10_000;
+        return invoiceAmount * 1_000 / 10_000;
     }
 
     /// @dev Funds `principal` against an invoice large enough for the 90% cap, standard fee.
@@ -89,8 +89,8 @@ contract DuelyVaultAdvanceTest is Test {
         uint256 cashBefore = vault.availableLiquidity();
 
         vm.expectEmit(true, true, false, true, address(vault));
-        emit IDuelyVault.AdvanceFunded(7, freelancer, 1000 * E18, 900 * E18, 30 * E18, 900 * E18);
-        escrow.fund(vault, 7, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        emit IDuelyVault.AdvanceFunded(7, freelancer, 1000 * E18, 900 * E18, 100 * E18, 900 * E18);
+        escrow.fund(vault, 7, freelancer, 1000 * E18, 900 * E18, 100 * E18);
 
         assertEq(rlusd.balanceOf(freelancer), 900 * E18);
         assertEq(vault.availableLiquidity(), cashBefore - 900 * E18, "cash down by principal");
@@ -103,7 +103,7 @@ contract DuelyVaultAdvanceTest is Test {
         assertEq(a.freelancer, freelancer);
         assertEq(a.invoiceAmount, 1000 * E18);
         assertEq(a.principal, 900 * E18);
-        assertEq(a.fee, 30 * E18);
+        assertEq(a.fee, 100 * E18);
         assertEq(a.principalRepaid, 0);
         assertEq(a.feeEarned, 0);
         assertEq(a.loss, 0);
@@ -117,7 +117,7 @@ contract DuelyVaultAdvanceTest is Test {
         _fund(1, 400 * E18);
         bytes32 snap = _snapshot();
         vm.expectRevert(abi.encodeWithSelector(IDuelyVault.AdvanceAlreadyExists.selector, 1));
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 100 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 100 * E18, 100 * E18);
         assertEq(_snapshot(), snap, "duplicate attempt changed nothing");
 
         _fund(2, 400 * E18);
@@ -159,10 +159,10 @@ contract DuelyVaultAdvanceTest is Test {
     function test_fundAdvance_revertsWithoutEscrow() public {
         _deposit(lp1, 4000 * E18);
         vm.expectRevert(IDuelyVault.EscrowNotSet.selector);
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         vm.prank(stranger);
         vm.expectRevert(IDuelyVault.EscrowNotSet.selector);
-        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
     }
 
     function test_fundAdvance_onlyTheConfiguredEscrow() public {
@@ -172,12 +172,12 @@ contract DuelyVaultAdvanceTest is Test {
         for (uint256 i; i < callers.length; i++) {
             vm.prank(callers[i]);
             vm.expectRevert(IDuelyVault.NotEscrow.selector);
-            vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+            vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         }
         // Even the freelancer cannot trigger their own advance.
         vm.prank(freelancer);
         vm.expectRevert(IDuelyVault.NotEscrow.selector);
-        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         assertEq(_snapshot(), snap);
     }
 
@@ -199,7 +199,7 @@ contract DuelyVaultAdvanceTest is Test {
         address[4] memory bad = [address(0), address(vault), address(escrow), address(rlusd)];
         for (uint256 i; i < bad.length; i++) {
             vm.expectRevert(IDuelyVault.InvalidAddress.selector);
-            escrow.fund(vault, 1, bad[i], 1000 * E18, 900 * E18, 30 * E18);
+            escrow.fund(vault, 1, bad[i], 1000 * E18, 900 * E18, 100 * E18);
         }
         assertEq(_snapshot(), snap);
     }
@@ -207,38 +207,38 @@ contract DuelyVaultAdvanceTest is Test {
     function test_advanceRatio_boundaryIs90PercentFloored() public {
         _ready();
         // Exactly 90% passes.
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         // One wei over 90% reverts.
         vm.expectRevert(
             abi.encodeWithSelector(
                 IDuelyVault.AdvanceExceedsInvoiceCap.selector, 900 * E18 + 1, 1000 * E18
             )
         );
-        escrow.fund(vault, 2, freelancer, 1000 * E18, 900 * E18 + 1, 30 * E18);
+        escrow.fund(vault, 2, freelancer, 1000 * E18, 900 * E18 + 1, 100 * E18);
         // Floor rounding: invoice of 10_001 wei allows exactly 9_000.
-        escrow.fund(vault, 3, freelancer, 10_001, 9_000, 300);
+        escrow.fund(vault, 3, freelancer, 10_001, 9_000, 1_000);
         vm.expectRevert(
             abi.encodeWithSelector(IDuelyVault.AdvanceExceedsInvoiceCap.selector, 9_001, 10_001)
         );
-        escrow.fund(vault, 4, freelancer, 10_001, 9_001, 300);
+        escrow.fund(vault, 4, freelancer, 10_001, 9_001, 1_000);
         // A tiny advance against a large invoice is still within the cap.
-        escrow.fund(vault, 5, freelancer, 1000 * E18, 1, 30 * E18);
+        escrow.fund(vault, 5, freelancer, 1000 * E18, 1, 100 * E18);
     }
 
-    function test_fee_mustEqual300bpsOfInvoice() public {
+    function test_fee_mustEqual1000bpsOfInvoice() public {
         _ready();
         bytes32 snap = _snapshot();
-        uint256[3] memory wrong = [uint256(0), 30 * E18 - 1, 30 * E18 + 1];
+        uint256[3] memory wrong = [uint256(0), 100 * E18 - 1, 100 * E18 + 1];
         for (uint256 i; i < wrong.length; i++) {
             vm.expectRevert(
-                abi.encodeWithSelector(IDuelyVault.InvalidFee.selector, wrong[i], 30 * E18)
+                abi.encodeWithSelector(IDuelyVault.InvalidFee.selector, wrong[i], 100 * E18)
             );
             escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, wrong[i]);
         }
         assertEq(_snapshot(), snap);
         // Floor rounding on small invoices, including a zero fee.
-        escrow.fund(vault, 2, freelancer, 33, 29, 0);
-        escrow.fund(vault, 3, freelancer, 34, 30, 1);
+        escrow.fund(vault, 2, freelancer, 33, 29, 3);
+        escrow.fund(vault, 3, freelancer, 34, 30, 3);
     }
 
     // ------------------------------------------------------------------ liquidity and risk caps
@@ -266,8 +266,8 @@ contract DuelyVaultAdvanceTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IDuelyVault.ExceedsInvoiceExposureLimit.selector, 1001, 1000)
         );
-        escrow.fund(vault, 1, freelancer, 1200, 1001, 36);
-        escrow.fund(vault, 1, freelancer, 1200, 1000, 36);
+        escrow.fund(vault, 1, freelancer, 1200, 1001, 120);
+        escrow.fund(vault, 1, freelancer, 1200, 1000, 120);
     }
 
     function test_utilization_boundary80PercentOfNav() public {
@@ -283,10 +283,10 @@ contract DuelyVaultAdvanceTest is Test {
                 IDuelyVault.ExceedsUtilizationLimit.selector, 3200 * E18 + 1, 3200 * E18
             )
         );
-        escrow.fund(vault, 4, freelancer, 1000 * E18, 200 * E18 + 1, 30 * E18);
+        escrow.fund(vault, 4, freelancer, 1000 * E18, 200 * E18 + 1, 100 * E18);
         assertEq(_snapshot(), snap, "failed funding leaves everything unchanged");
 
-        escrow.fund(vault, 4, freelancer, 400 * E18, 200 * E18, 12 * E18);
+        escrow.fund(vault, 4, freelancer, 400 * E18, 200 * E18, 40 * E18);
         assertEq(vault.utilizationBps(), 8000);
         assertEq(vault.maxAdvanceNow(), 0);
 
@@ -367,16 +367,16 @@ contract DuelyVaultAdvanceTest is Test {
         assertEq(vault.maxAdvanceNow(), 0);
         bytes32 snap = _snapshot();
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         // Authorization is checked first.
         vm.prank(stranger);
         vm.expectRevert(IDuelyVault.NotEscrow.selector);
-        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        vault.fundAdvance(1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         assertEq(_snapshot(), snap);
 
         vm.prank(operator);
         vault.unpause();
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
     }
 
     function test_advancePause_blocksOnlyFunding_notLps() public {
@@ -386,7 +386,7 @@ contract DuelyVaultAdvanceTest is Test {
         assertEq(vault.maxAdvanceNow(), 0);
         bytes32 snap = _snapshot();
         vm.expectRevert(IDuelyVault.AdvancesAreDisabled.selector);
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         assertEq(_snapshot(), snap);
 
         // LPs unaffected.
@@ -397,7 +397,7 @@ contract DuelyVaultAdvanceTest is Test {
 
         vm.prank(operator);
         vault.unpauseAdvances();
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
     }
 
     function test_bothPauses_mustBeClearedToFund() public {
@@ -408,9 +408,9 @@ contract DuelyVaultAdvanceTest is Test {
         vault.unpause();
         vm.stopPrank();
         vm.expectRevert(IDuelyVault.AdvancesAreDisabled.selector);
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
         vm.prank(operator);
         vault.unpauseAdvances();
-        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 30 * E18);
+        escrow.fund(vault, 1, freelancer, 1000 * E18, 900 * E18, 100 * E18);
     }
 }

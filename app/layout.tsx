@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Duely — escrow-backed early payment (demo)",
-  description: "Freelancer escrow with AI-checked deliverables and a 90% early payment advance. Demo mode with simulated tokens.",
+  description: "Freelancer escrow with AI-checked deliverables and an early payment advance chosen by the client. Demo mode with simulated tokens.",
   applicationName: "Duely",
   appleWebApp: { capable: true, title: "Duely", statusBarStyle: "default" },
   // Stops iOS from turning token amounts and addresses into phone-number links.

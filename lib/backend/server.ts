@@ -7,6 +7,7 @@ import { createSupabaseObjectStore, getSessionUserId } from "@/lib/evidence/serv
 import { mapAdvanceInsertError, mapEvaluationInsertError } from "./db-errors"
 import { createGeminiEvaluatorFromEnv } from "@/lib/ai/evaluation-service"
 import { demoEvaluator, resolveEvaluatorMode } from "./demo-evaluator"
+import { scriptedMockEnabled, withScriptedFixture } from "./scripted-evaluator"
 import { activeDeploymentScope } from "./scope"
 import { createEvaluatorSignerFromEnv } from "./advance-signer"
 import { createChainAdapter } from "./chain-adapter"
@@ -29,7 +30,7 @@ import {
 type Admin = SupabaseClient<Database>
 
 const INVOICE_COLS =
-  "id, chain_id, contract_address, token_address, invoice_id::text, client_address, freelancer_address, amount::text, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date, onchain_status, advance_amount::text, chain_synced_at, created_at"
+  "id, chain_id, contract_address, token_address, invoice_id::text, client_address, freelancer_address, amount::text, criteria_hash, criteria_version, criteria_count, criteria_canonical, title, description, due_date, onchain_status, advance_amount::text, advance_share_bps, chain_synced_at, created_at"
 // "*", not a column list: repository_url / commit_sha only exist once migration 9 is applied, and naming them would break every
 // submission read on a database without them. toSubmission() picks the fields and reads a missing column as null.
 const SUBMISSION_COLS = "*"
@@ -151,6 +152,11 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
         .order("id", { ascending: false })
       if (error) fail(error)
       return rows<Record<string, unknown>>(data).map(toSubmission)
+    },
+    async insertScriptedDemoSubmission(row) {
+      const { data, error } = await admin.from("submissions").insert(row).select(SUBMISSION_COLS).single()
+      if (error) fail(error)
+      return toSubmission(data as Record<string, unknown>)
     },
     async getSubmission(id) {
       const { data, error } = await admin.from("submissions").select(SUBMISSION_COLS).eq("id", id).maybeSingle()
@@ -312,6 +318,7 @@ export function createSupabaseBackendDb(admin: Admin): BackendDb {
         p_user: a.userId,
         p_status: a.status,
         p_block: a.blockNumber,
+        p_advance_share_bps: a.advanceShareBps,
       })
       if (error) fail(error)
       const row = data?.[0]
@@ -340,8 +347,9 @@ export function getAdvanceSigner(scope: DeploymentScope = activeDeploymentScope(
 /** DUELY_EVALUATOR_MODE: "gemini" = the real evaluator, "demo" = deterministic and simulated (never in production), otherwise off. */
 export function getEvaluator(): Evaluator {
   const mode = resolveEvaluatorMode(process.env)
-  if (mode === "gemini") return createGeminiEvaluatorFromEnv(process.env)
-  return mode === "demo" ? demoEvaluator : disabledEvaluator
+  const base = mode === "gemini" ? createGeminiEvaluatorFromEnv(process.env) : mode === "demo" ? demoEvaluator : disabledEvaluator
+  // DUELY_MOCK_AI_EVALUATION=true: the designated calculator submission gets a scripted result; everything else is unchanged.
+  return withScriptedFixture(base, process.env)
 }
 
 export function getBackendDeps(): BackendDeps {
@@ -356,6 +364,7 @@ export function getBackendDeps(): BackendDeps {
     chain: getChainAdapter(scope),
     signer: getAdvanceSigner(scope),
     evaluator: getEvaluator(),
+    scriptedDemoAdvance: scriptedMockEnabled(process.env),
   }
 }
 

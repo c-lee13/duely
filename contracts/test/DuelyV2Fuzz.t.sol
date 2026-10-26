@@ -389,7 +389,7 @@ contract DuelyV2FuzzTest is Test {
     function _realInvoice(uint256 amount, bool advance) internal returns (uint256 id) {
         tok.mint(client, amount);
         vm.prank(client);
-        id = escrow.createInvoice(freelancer, amount, META);
+        id = escrow.createInvoice(freelancer, amount, META, 10_000);
         vm.prank(client);
         escrow.fundInvoice(id);
         if (advance) {
@@ -443,7 +443,7 @@ contract DuelyV2FuzzTest is Test {
             } else {
                 vm.prank(client);
                 escrow.approveCompletion(ids[i]);
-                fees += 27 * E18;
+                fees += 90 * E18;
             }
         }
         assertEq(vault.outstandingPrincipal(), 0);
@@ -528,7 +528,7 @@ contract DuelyV2FuzzTest is Test {
         escrow.approveCompletion(inv[3]);
         tok.mint(client, 1000 * E18);
         vm.prank(client);
-        inv[4] = escrow.createInvoice(freelancer, 1000 * E18, META);
+        inv[4] = escrow.createInvoice(freelancer, 1000 * E18, META, 10_000);
         tok.mint(lps[0], 10 * E18);
         vm.prank(lps[0]);
         tok.approve(address(vault), type(uint256).max);

@@ -55,7 +55,14 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
 
     function _funded(address who, address to, uint256 amount) internal returns (uint256 id) {
         vm.prank(who);
-        id = escrow.createInvoice(to, amount, META);
+        id = escrow.createInvoice(to, amount, META, 10_000);
+        vm.prank(who);
+        escrow.fundInvoice(id);
+    }
+
+    function _fundedShare(address who, address to, uint256 amount, uint256 share) internal returns (uint256 id) {
+        vm.prank(who);
+        id = escrow.createInvoice(to, amount, META, share);
         vm.prank(who);
         escrow.fundInvoice(id);
     }
@@ -90,16 +97,16 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
     // ------------------------------------------------------------------ crediting
 
     function test_settlement_creditsInsteadOfPaying_andReservesTheTokens() public {
-        uint256 id = _funded(client, freelancer, 1000 * E18);
+        uint256 id = _fundedShare(client, freelancer, 1000 * E18, 5_000); // advance 450, fee 100, remainder 450
         _advance(id);
         _assertReserved();
         _approve(client, id);
 
-        assertEq(rlusd.balanceOf(freelancer), 900 * E18, "only the advance was paid");
-        assertEq(escrow.claimable(freelancer), 70 * E18);
-        assertEq(escrow.totalClaimable(), 70 * E18);
+        assertEq(rlusd.balanceOf(freelancer), 450 * E18, "only the advance was paid");
+        assertEq(escrow.claimable(freelancer), 450 * E18);
+        assertEq(escrow.totalClaimable(), 450 * E18);
         assertEq(escrow.totalEscrow(), 0);
-        assertEq(rlusd.balanceOf(address(escrow)), 70 * E18, "reserved in the escrow");
+        assertEq(rlusd.balanceOf(address(escrow)), 450 * E18, "reserved in the escrow");
         _assertReserved();
     }
 
@@ -133,15 +140,15 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
         uint256 c = _funded(client, freelancer, 300 * E18);
         _advance(a);
         _advance(b);
-        _approve(client, a); // 70
-        _approve(client, b); // 35
+        _approve(client, a); // 0: advance 900 + fee 100 consume the invoice at a 100% slider
+        _approve(client, b); // 0: advance 450 + fee 50
         _approve(client, c); // 300, no advance
-        assertEq(escrow.claimable(freelancer), 405 * E18);
+        assertEq(escrow.claimable(freelancer), 300 * E18);
 
         uint256 before = rlusd.balanceOf(freelancer);
         uint256 paid = escrow.claim(freelancer);
-        assertEq(paid, 405 * E18);
-        assertEq(rlusd.balanceOf(freelancer) - before, 405 * E18);
+        assertEq(paid, 300 * E18);
+        assertEq(rlusd.balanceOf(freelancer) - before, 300 * E18);
         assertEq(escrow.totalClaimable(), 0);
         _assertReserved();
     }
@@ -240,7 +247,7 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
     }
 
     function test_claim_isIndependentOfTheVault() public {
-        uint256 id = _funded(client, freelancer, 1000 * E18);
+        uint256 id = _fundedShare(client, freelancer, 1000 * E18, 5_000); // advance 450, remainder 450
         _advance(id);
         _approve(client, id);
         vm.startPrank(operator);
@@ -257,7 +264,7 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
                 abi.encode(vault.totalAssets(), vault.outstandingPrincipal(), vault.totalSupply())
             )
         );
-        assertEq(rlusd.balanceOf(freelancer), 970 * E18);
+        assertEq(rlusd.balanceOf(freelancer), 900 * E18);
     }
 
     // ------------------------------------------------------------------ solvency / invariants
@@ -312,7 +319,7 @@ contract InvoiceAdvanceV2ClaimsTest is Test {
         uint256 expectClient;
         for (uint256 i; i < 3; i++) {
             uint256 id = _funded(client, freelancer, amounts[i]);
-            (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(amounts[i]);
+            (uint256 adv, uint256 fee,,) = escrow.quoteAdvance(amounts[i], 10_000);
             bool advanced = (outcomes >> (i * 2)) & 1 == 1 && adv > 0;
             if (advanced) _advance(id);
             bool refund = (outcomes >> (i * 2 + 1)) & 1 == 1;

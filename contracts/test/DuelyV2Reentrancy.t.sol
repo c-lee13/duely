@@ -67,7 +67,7 @@ contract DuelyV2ReentrancyTest is Test {
         p[1] = abi.encodeCall(vault.mint, (1, who));
         p[2] = abi.encodeCall(vault.withdraw, (1, who, who));
         p[3] = abi.encodeCall(vault.redeem, (1, who, who));
-        p[4] = abi.encodeCall(vault.fundAdvance, (77, who, 1000 * E18, 900 * E18, 30 * E18));
+        p[4] = abi.encodeCall(vault.fundAdvance, (77, who, 1000 * E18, 900 * E18, 100 * E18));
         p[5] = abi.encodeCall(vault.recordRepayment, (id));
         p[6] = abi.encodeCall(vault.finalizeLoss, (id));
         p[7] = abi.encodeCall(escrow.fundInvoice, (id));
@@ -91,8 +91,12 @@ contract DuelyV2ReentrancyTest is Test {
     }
 
     function _createFunded(address who, address to, uint256 amount) internal returns (uint256 id) {
+        return _createFundedShare(who, to, amount, 10_000);
+    }
+
+    function _createFundedShare(address who, address to, uint256 amount, uint256 share) internal returns (uint256 id) {
         vm.prank(who);
-        id = escrow.createInvoice(to, amount, META);
+        id = escrow.createInvoice(to, amount, META, share);
         vm.prank(who);
         escrow.fundInvoice(id);
     }
@@ -188,13 +192,14 @@ contract DuelyV2ReentrancyTest is Test {
     /// (4-6) and every escrow call (7-11) must fail.
     function test_freelancer_reentersWhenRemainderIsClaimed() public {
         HookAttacker a = _attacker(0);
-        uint256 id = _createFunded(client, address(a), 1000 * E18);
+        // 50% slider: advance 450, fee 100, remainder 450.
+        uint256 id = _createFundedShare(client, address(a), 1000 * E18, 5_000);
         vm.prank(evaluator);
         escrow.approveAdvance(id, EVAL);
         vm.prank(client);
         escrow.approveCompletion(id);
-        assertEq(tok.balanceOf(address(a)), 900 * E18, "settlement did not push the remainder");
-        assertEq(escrow.claimable(address(a)), 70 * E18);
+        assertEq(tok.balanceOf(address(a)), 450 * E18, "settlement did not push the remainder");
+        assertEq(escrow.claimable(address(a)), 450 * E18);
 
         bytes[] memory p = _payloads(id, address(a));
         for (uint256 i = 4; i < p.length; i++) {
@@ -202,10 +207,10 @@ contract DuelyV2ReentrancyTest is Test {
             a.arm(_route(i), p[i], false);
             escrow.claim(address(a)); // anyone can trigger it; the recipient is fixed
             _assertBlocked(a, i >= 7);
-            assertEq(tok.balanceOf(address(a)), 970 * E18, "900 + 70, once");
+            assertEq(tok.balanceOf(address(a)), 900 * E18, "450 + 450, once");
             assertEq(escrow.claimable(address(a)), 0);
             assertEq(escrow.totalClaimable(), 0);
-            assertEq(a.seenTotalAssets(), 4030 * E18, "callback saw the fully settled state");
+            assertEq(a.seenTotalAssets(), 4100 * E18, "callback saw the fully settled state");
             vm.revertToState(snap);
         }
     }
@@ -216,7 +221,7 @@ contract DuelyV2ReentrancyTest is Test {
         HookAttacker a = _attacker(1000 * E18);
         uint256 start = tok.balanceOf(address(a));
         a.exec(
-            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META))
+            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META, 10_000))
         );
         uint256 id = 1;
         a.exec(address(escrow), abi.encodeCall(escrow.fundInvoice, (id)));
@@ -256,7 +261,7 @@ contract DuelyV2ReentrancyTest is Test {
     function test_client_reentersWhileFunding_cannotCancelOrDoubleFund() public {
         HookAttacker a = _attacker(1000 * E18);
         a.exec(
-            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META))
+            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META, 10_000))
         );
         uint256 id = 1;
         bytes[] memory p = new bytes[](3);
@@ -283,7 +288,7 @@ contract DuelyV2ReentrancyTest is Test {
     function test_client_disputeFromInsideFundingCallback_staysConsistent() public {
         HookAttacker a = _attacker(1000 * E18);
         a.exec(
-            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META))
+            address(escrow), abi.encodeCall(escrow.createInvoice, (freelancer, 1000 * E18, META, 10_000))
         );
         a.arm(address(escrow), abi.encodeCall(escrow.raiseDispute, (1)), true);
         a.exec(address(escrow), abi.encodeCall(escrow.fundInvoice, (1)));

@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """Read-only verification of the live Duely V2 deployment (XRPL EVM testnet). Sends no transactions.
 
-Usage (from contracts/):  python3 -I script/verify_v2.py [--json]
+Usage (from contracts/):
+  python3 -I script/verify_v2.py [--json]                      deployment discovered from the Foundry broadcast records
+  python3 -I script/verify_v2.py --broadcast-dir DIR           ... from another directory of records
+  python3 -I script/verify_v2.py --vault A --escrow B --vault-tx H --escrow-tx H    explicit, no records needed
+
+The deployment (addresses and creation transactions) is only a CLAIM here: the records are parsed by
+script/v2_deployment.py, and everything below is then re-derived from the chain (receipts, contract addresses,
+chain id, constructor arguments, bytecode, link event, roles, parameters, token). Nothing is taken from the records
+as proof.
 
 Every state read is pinned to ONE block so the report is internally consistent. The RPC is reached through
 the Foundry alias `xrpl_evm_testnet` (XRPL_EVM_RPC_URL), so no URL or secret is read, printed or stored.
@@ -16,16 +24,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I does not add the script directory; this is our own module
+import v2_deployment  # noqa: E402
+
 RPC = "xrpl_evm_testnet"
 CHAIN_ID = 1449000
 
 RLUSD = "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3"
-VAULT = "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8"
-ESCROW = "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96"
-TX = {
-    "vault": "0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70",
-    "escrow": "0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5",
-}
+# Set by resolve_deployment() before any check runs.
+VAULT = ESCROW = ""
+TX = {}
 V1_ADDRESSES = {
     "0x328fc0DbF3d1F704B065192f4bFC7583bfA550E0",
     "0x1B972ec6B1B5E0b592010e7484beF0accC382792",
@@ -91,11 +99,25 @@ def masked(code_hex, refs):
     return bytes(b)
 
 
+LOG_RANGE = 9000  # the RPC refuses eth_getLogs ranges above 10,000 blocks
+
+
+def get_logs(addr, from_block, to_block, event):
+    """eth_getLogs over any range, in chunks the RPC accepts, oldest first."""
+    out = []
+    start = from_block
+    while start <= to_block:
+        end = min(start + LOG_RANGE - 1, to_block)
+        out += json.loads(cast("logs", "--rpc-url", RPC, "--address", addr, "--from-block", str(start), "--to-block", str(end), event, "--json"))
+        start = end + 1
+    return out
+
+
 def role_holders(addr, from_block, to_block):
     """Final holder set per role, from RoleGranted/RoleRevoked logs (the only ways a role changes)."""
     held = {}
     for event, grant in (("RoleGranted(bytes32 indexed,address indexed,address indexed)", True), ("RoleRevoked(bytes32 indexed,address indexed,address indexed)", False)):
-        logs = json.loads(cast("logs", "--rpc-url", RPC, "--address", addr, "--from-block", str(from_block), "--to-block", str(to_block), event, "--json"))
+        logs = get_logs(addr, from_block, to_block, event)
         for l in logs:
             role = l["topics"][1]
             who = "0x" + l["topics"][2][-40:]
@@ -109,12 +131,51 @@ def role_holders(addr, from_block, to_block):
     return out
 
 
+def arg_value(name):
+    if name not in sys.argv:
+        return None
+    i = sys.argv.index(name)
+    if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("--"):
+        raise RuntimeError(f"{name} needs a value")
+    return sys.argv[i + 1]
+
+
+def resolve_deployment():
+    """Which deployment to verify: explicit arguments, or the (single) one in the broadcast records."""
+    global VAULT, ESCROW, TX
+    explicit = {k: arg_value(f"--{k}") for k in ("vault", "escrow", "vault-tx", "escrow-tx")}
+    if any(explicit.values()):
+        if not all(explicit.values()):
+            raise RuntimeError("explicit mode needs all of --vault --escrow --vault-tx --escrow-tx")
+        VAULT, ESCROW = explicit["vault"], explicit["escrow"]
+        TX = {"vault": explicit["vault-tx"], "escrow": explicit["escrow-tx"]}
+        source = "explicit arguments"
+    else:
+        directory = arg_value("--broadcast-dir") or v2_deployment.BROADCAST_DIR
+        try:
+            d = v2_deployment.discover(directory)
+        except v2_deployment.DiscoveryError as e:
+            raise RuntimeError(f"cannot discover the deployment: {e}")
+        VAULT, ESCROW = d["vault"]["address"], d["escrow"]["address"]
+        TX = {"vault": d["vault"]["txHash"], "escrow": d["escrow"]["txHash"]}
+        source = f"broadcast records in {directory}"
+    for label, a in (("vault", VAULT), ("escrow", ESCROW)):
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", a):
+            raise RuntimeError(f"{label} address is not a valid address")
+    for label, h in TX.items():
+        if not re.fullmatch(r"0x[0-9a-fA-F]{64}", h):
+            raise RuntimeError(f"{label} transaction hash is not valid")
+    return source
+
+
 def main():
     want_json = "--json" in sys.argv
+    source = resolve_deployment()
     env = load_env()
     head = int(cast("block-number", "--rpc-url", RPC))
     block = head  # every read below is pinned to this block
-    print(f"Duely V2 live verification, all reads pinned to block {block}\n")
+    print(f"Duely V2 live verification, all reads pinned to block {block}")
+    print(f"deployment claimed by {source}: vault {VAULT}, escrow {ESCROW}\n")
 
     print("network")
     check("chain id is 1449000", int(cast("chain-id", "--rpc-url", RPC)) == CHAIN_ID)
@@ -134,6 +195,8 @@ def main():
         rcpt[k] = r
         check(f"{k} deployment tx succeeded", r["status"] == "0x1", r["status"])
         check(f"{k} deployed by DEPLOYER_ADDRESS", lower(r["from"]) == lower(deployer))
+        check(f"{k} transaction is a contract creation (no recipient)", r.get("to") in (None, ""), str(r.get("to")))
+        check(f"{k} transaction was sent for chain {CHAIN_ID}", int(cast("tx", h, "chainId", "--rpc-url", RPC), 0) == CHAIN_ID)
     check("vault tx created the vault address", lower(rcpt["vault"]["contractAddress"]) == lower(VAULT))
     check("escrow tx created the escrow address", lower(rcpt["escrow"]["contractAddress"]) == lower(ESCROW))
     vault_block = int(rcpt["vault"]["blockNumber"], 16)
@@ -169,7 +232,7 @@ def main():
     check("escrow.vault() == DuelyVault", lower(call(ESCROW, "vault()(address)", block=block)) == lower(VAULT))
     check("escrow.paymentToken() == RLUSD", lower(call(ESCROW, "paymentToken()(address)", block=block)) == lower(RLUSD))
     check("vault.escrow() == InvoiceAdvanceV2", lower(call(VAULT, "escrow()(address)", block=block)) == lower(ESCROW))
-    logs = json.loads(cast("logs", "--rpc-url", RPC, "--address", VAULT, "--from-block", str(vault_block), "--to-block", str(block), "EscrowSet(address indexed)", "--json"))
+    logs = get_logs(VAULT, vault_block, block, "EscrowSet(address indexed)")
     check("exactly one EscrowSet event (the one-time link was used once)", len(logs) == 1, f"{len(logs)} events")
     link_tx = logs[0]["transactionHash"] if logs else None
     link_block = int(logs[0]["blockNumber"], 16) if logs else None
@@ -205,14 +268,37 @@ def main():
         print("  note  admin == operator == pauser == deployer: one key controls the vault (accepted for the testnet MVP, decision D5)")
 
     print("\nparameters (vault and escrow agree)")
-    check("vault FEE_BPS == 300", num(VAULT, "FEE_BPS()(uint256)", block=block) == 300)
-    check("escrow FEE_BPS == 300", num(ESCROW, "FEE_BPS()(uint256)", block=block) == 300)
+    check("vault FEE_BPS == 1000", num(VAULT, "FEE_BPS()(uint256)", block=block) == 1000)
+    check("escrow FEE_BPS == 1000", num(ESCROW, "FEE_BPS()(uint256)", block=block) == 1000)
     check("escrow ADVANCE_BPS == 9000", num(ESCROW, "ADVANCE_BPS()(uint256)", block=block) == 9000)
+    try:
+        min_share = num(ESCROW, "MIN_ADVANCE_SHARE_BPS()(uint256)", block=block)
+    except RuntimeError:
+        min_share = None  # an older build without the client-chosen advance rate
+    check("escrow MIN_ADVANCE_SHARE_BPS == 5000", min_share == 5000, str(min_share))
     check("vault MAX_ADVANCE_BPS == 9000", num(VAULT, "MAX_ADVANCE_BPS()(uint256)", block=block) == 9000)
     check("vault MAX_UTILIZATION_BPS == 8000", num(VAULT, "MAX_UTILIZATION_BPS()(uint256)", block=block) == 8000)
     check("vault MAX_INVOICE_EXPOSURE_BPS == 2500", num(VAULT, "MAX_INVOICE_EXPOSURE_BPS()(uint256)", block=block) == 2500)
     check("vault share decimals == 24", num(VAULT, "decimals()(uint8)", block=block) == 24)
     check("vault name/symbol", call(VAULT, "name()(string)", block=block) == "Duely Vault Share" and call(VAULT, "symbol()(string)", block=block) == "dvRLUSD")
+
+    print("\nfee and advance-rate schedule (the contract's own quote)")
+    e18 = 10**18
+    for share, adv in ((10000, 900), (7500, 675), (5000, 450)):
+        try:
+            q = cast("call", ESCROW, "quoteAdvance(uint256,uint256)(uint256,uint256,uint256,uint256)", str(1000 * e18), str(share), "--rpc-url", RPC, "--block", str(block))
+            got = [int(x.split(" ")[0]) for x in q.splitlines()]
+        except RuntimeError:
+            got = ["quoteAdvance(amount, advanceShareBps) is not available on this build"]
+        want = [adv * e18, 100 * e18, (adv + 100) * e18, (1000 - adv - 100) * e18]
+        check(f"quoteAdvance(1000, {share // 100}%) = advance {adv}, fixed fee 100, repay {adv + 100}, remainder {1000 - adv - 100}", got == want, str(got))
+    for bad in (4999, 10001):
+        try:
+            cast("call", ESCROW, "createInvoice(address,uint256,bytes32,uint256)(uint256)", "0x0000000000000000000000000000000000000001", "1", "0x" + "11" * 32, str(bad), "--from", "0x0000000000000000000000000000000000000002", "--rpc-url", RPC, "--block", str(block))
+            check(f"createInvoice rejects an advance rate of {bad} bps", False, "call did not revert")
+        except RuntimeError as err:
+            # Only the contract's own InvalidAdvanceShare() error counts; a missing function also reverts, and must not pass.
+            check(f"createInvoice rejects an advance rate of {bad} bps with InvalidAdvanceShare", "InvalidAdvanceShare" in str(err) or "0x2bcfd6c0" in str(err), str(err)[:120])
 
     print("\nstate at initialization")
     zero = lambda label, v: check(label, v == 0, str(v))
@@ -243,6 +329,9 @@ def main():
         "failed": [r[0] for r in failed],
         "linkTransaction": {"hash": link_tx, "block": link_block},
         "deploymentBlocks": {"vault": vault_block, "escrow": escrow_block},
+        "vault": VAULT,
+        "escrow": ESCROW,
+        "transactions": {"vault": TX["vault"], "escrow": TX["escrow"], "link": link_tx},
     }
     if want_json:
         print(json.dumps(report))

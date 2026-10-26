@@ -43,7 +43,7 @@ import type { InvoiceBundle, Session } from "@/lib/frontend/domain"
 import { canClientApprove, canClientDispute, canFund, evaluationFor, settlementProjection } from "@/lib/frontend/eligibility"
 import { isGithubEvaluation } from "@/lib/frontend/github-evaluation"
 import { githubLinks, shortSha } from "@/lib/frontend/github-input"
-import { formatToken, isZero } from "@/lib/frontend/token"
+import { advancePercentOfInvoice, formatToken, isZero } from "@/lib/frontend/token"
 import { fundingCopy } from "@/lib/frontend/protocol-copy"
 
 function Detail({ session, invoiceId }: { session: Session; invoiceId: string }) {
@@ -165,7 +165,7 @@ function DetailBody({ bundle, reload }: { bundle: InvoiceBundle; reload: () => v
           {invoice.onchainStatus === "Advanced" && (
             <Alert>
               <CheckCircle2 />
-              <AlertTitle>90% advance paid from {fc.source}</AlertTitle>
+              <AlertTitle>Advance paid from {fc.source} ({advancePercentOfInvoice(invoice.advanceShareBps)} of the invoice)</AlertTitle>
               <AlertDescription>
                 {fc.pull ? (
                   <>The freelancer received <Amount value={invoice.advanceAmount} />. Approving repays the vault <Amount value={proj.reserveCredit} /> (the advance plus a <Amount value={proj.fee} /> financing fee) and credits the remaining <Amount value={proj.toFreelancer} /> to the freelancer to claim.</>

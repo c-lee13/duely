@@ -7,7 +7,7 @@ export const deploymentV2 = {
   chainId: 1449000,
   network: "xrpl-evm-testnet",
   explorer: "https://explorer.testnet.xrplevm.org",
-  sourceCommit: "a06209e",
+  sourceCommit: "7adce0b",
   contracts: {
     paymentToken: {
       name: "RLUSD",
@@ -18,12 +18,12 @@ export const deploymentV2 = {
       isDemoToken: false,
     },
     duelyVault: {
-      address: "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+      address: "0xCb031203549809DE05c4e9fa097d881d375094b8",
       contract: "DuelyVault",
       deployTxHash:
-        "0xa29c18b9d31b42d5983de0c63fd36c1f7d46b55ff5b341112589106da7bf8c70",
-      deployBlock: 9234793,
-      gasUsed: 4082089,
+        "0xdd3af5e03ad0f0d4a8040249f8f0e6b1fb7e381ba4ea4b9a92a062628d184fb3",
+      deployBlock: 9251179,
+      gasUsed: 4082101,
       constructorArguments: {
         asset: "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
         admin: "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
@@ -37,15 +37,15 @@ export const deploymentV2 = {
       },
     },
     invoiceAdvanceV2: {
-      address: "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96",
+      address: "0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302",
       contract: "InvoiceAdvanceV2",
       deployTxHash:
-        "0xc73eb1ecf99041a38ea63a0554956fabaadcb122662d104a7c4be45791d386b5",
-      deployBlock: 9234835,
-      gasUsed: 2984863,
+        "0x0fb674b9ee188d59054970251f9c7ec94f3c6b98c4caaf8f4233f757274bda27",
+      deployBlock: 9251193,
+      gasUsed: 3067106,
       constructorArguments: {
         paymentToken: "0x27b57a9D0b8d24EB97259c4E2279e45255e016f3",
-        vault: "0x5f8B53B32acab32F8c283CB40a4B7ac04792B6E8",
+        vault: "0xCb031203549809DE05c4e9fa097d881d375094b8",
         admin: "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
         operator: "0x6e83F6Bb6758Ced46e60be88271D72C22B84482E",
         evaluator: "0x276acaB037BB048a682E0E7ad900F3fFDCe65ECb",
@@ -54,11 +54,11 @@ export const deploymentV2 = {
   },
   link: {
     call: "DuelyVault.setEscrow(address)",
-    escrow: "0x2E1598D6DBDa061EB6CafCa5D7AEe1630A04Ba96",
+    escrow: "0x5bF225DC2743CD63B8F5DFcac19Cab16cf0Fe302",
     txHash:
-      "0xc5331536ed041b595e8674ea1ffa22a5d5c5653497956caa8f6cc512ffc5b6a5",
-    block: 9234849,
-    gasUsed: 55270,
+      "0x42d370bffb00eeb7d2560249109372c323e55deea4c9315e32d9fe2d56d89974",
+    block: 9251202,
+    gasUsed: 55204,
     sentBy: "0x6e83f6bb6758ced46e60be88271d72c22b84482e",
     note: "One-time and irreversible; confirmed by exactly one EscrowSet event.",
   },
@@ -80,17 +80,28 @@ export const deploymentV2 = {
     note: "Testnet MVP: admin == operator == pauser == deployer (one key). The evaluator is separate. Not suitable for production (decision D5).",
   },
   parameters: {
-    financingFeeBps: 300,
+    financingFeeBps: 1000,
+    minAdvanceShareBps: 5000,
     advanceBps: 9000,
     maxUtilizationBps: 8000,
     maxInvoiceExposureBps: 2500,
     vaultDecimalsOffset: 6,
+    advanceRate:
+      "client-chosen per invoice, advanceShareBps 5000..10000 of the 90% ceiling",
     example: {
       invoice: "1000",
-      advance: "900",
-      fee: "30",
-      vaultRepayment: "930",
-      freelancerRemainder: "70",
+      at100pct: {
+        advance: "900",
+        fee: "100",
+        vaultRepayment: "1000",
+        freelancerRemainder: "0",
+      },
+      at50pct: {
+        advance: "450",
+        fee: "100",
+        vaultRepayment: "550",
+        freelancerRemainder: "450",
+      },
     },
   },
 } as const

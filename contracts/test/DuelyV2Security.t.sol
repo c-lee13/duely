@@ -65,7 +65,7 @@ contract DuelyV2SecurityTest is Test {
 
     function _create(address who, address to, uint256 amount) internal returns (uint256 id) {
         vm.prank(who);
-        id = escrow.createInvoice(to, amount, META);
+        id = escrow.createInvoice(to, amount, META, 10_000);
     }
 
     function _funded(uint256 amount) internal returns (uint256 id) {
@@ -189,7 +189,7 @@ contract DuelyV2SecurityTest is Test {
         _matrix(
             "fundAdvance",
             address(vault),
-            abi.encodeCall(vault.fundAdvance, (50, freelancer, 1000 * E18, 900 * E18, 30 * E18)),
+            abi.encodeCall(vault.fundAdvance, (50, freelancer, 1000 * E18, 900 * E18, 100 * E18)),
             ESCROW
         );
         _matrix(
@@ -274,7 +274,7 @@ contract DuelyV2SecurityTest is Test {
             // No sweep / rescue / arbitrary-transfer function exists; the only fund-moving calls
             // are the escrow-only vault functions and the role-gated escrow ones.
             vm.expectRevert();
-            vault.fundAdvance(60, privileged[i], 1000 * E18, 900 * E18, 30 * E18);
+            vault.fundAdvance(60, privileged[i], 1000 * E18, 900 * E18, 100 * E18);
             vm.expectRevert();
             vault.recordRepayment(1);
             vm.expectRevert();
@@ -419,7 +419,7 @@ contract DuelyV2SecurityTest is Test {
             (BlacklistToken t, DuelyVault v, InvoiceAdvanceV2 e) = _blacklistSystem();
             t.setReturnFalse(mode == 1);
             vm.prank(client);
-            uint256 id = e.createInvoice(freelancer, 1000 * E18, META);
+            uint256 id = e.createInvoice(freelancer, 1000 * E18, META, 10_000);
             vm.prank(client);
             e.fundInvoice(id);
             t.setBlacklisted(freelancer, true);
@@ -440,7 +440,7 @@ contract DuelyV2SecurityTest is Test {
             (BlacklistToken t, DuelyVault v, InvoiceAdvanceV2 e) = _blacklistSystem();
             t.setReturnFalse(mode == 1);
             vm.prank(client);
-            uint256 id = e.createInvoice(freelancer, 1000 * E18, META);
+            uint256 id = e.createInvoice(freelancer, 1000 * E18, META, 5_000);
             vm.prank(client);
             e.fundInvoice(id);
             vm.prank(evaluator);
@@ -450,25 +450,25 @@ contract DuelyV2SecurityTest is Test {
             vm.prank(client);
             e.approveCompletion(id); // no payee transfer happens: settlement cannot be blocked
             assertEq(uint8(v.getAdvance(id).status), uint8(IDuelyVault.AdvanceStatus.Repaid));
-            assertEq(v.totalFeesEarned(), 30 * E18);
+            assertEq(v.totalFeesEarned(), 100 * E18);
             assertEq(v.totalRealizedLosses(), 0, "no LP loss from the freelancer's blacklisting");
-            assertEq(e.claimable(freelancer), 70 * E18);
+            assertEq(e.claimable(freelancer), 450 * E18);
 
             vm.expectRevert();
             e.claim(freelancer);
-            assertEq(e.claimable(freelancer), 70 * E18, "a failed claim destroys nothing");
-            assertEq(t.balanceOf(address(e)), 70 * E18, "still reserved");
+            assertEq(e.claimable(freelancer), 450 * E18, "a failed claim destroys nothing");
+            assertEq(t.balanceOf(address(e)), 450 * E18, "still reserved");
 
             t.setBlacklisted(freelancer, false);
             e.claim(freelancer);
-            assertEq(t.balanceOf(freelancer), 900 * E18 + 70 * E18);
+            assertEq(t.balanceOf(freelancer), 450 * E18 + 450 * E18);
         }
     }
 
     function test_blacklistedFreelancer_releaseRulingAlsoCompletes() public {
         (BlacklistToken t, DuelyVault v, InvoiceAdvanceV2 e) = _blacklistSystem();
         vm.prank(client);
-        uint256 id = e.createInvoice(freelancer, 1000 * E18, META);
+        uint256 id = e.createInvoice(freelancer, 1000 * E18, META, 10_000);
         vm.prank(client);
         e.fundInvoice(id);
         vm.prank(evaluator);
@@ -478,14 +478,14 @@ contract DuelyV2SecurityTest is Test {
         t.setBlacklisted(freelancer, true);
         vm.prank(operator);
         e.resolveDispute(id, true);
-        assertEq(v.totalFeesEarned(), 30 * E18);
-        assertEq(e.claimable(freelancer), 70 * E18);
+        assertEq(v.totalFeesEarned(), 100 * E18);
+        assertEq(e.claimable(freelancer), 0);
     }
 
     function test_blacklistedClient_refundRulingStillRecordsLoss_claimWaits() public {
         (BlacklistToken t, DuelyVault v, InvoiceAdvanceV2 e) = _blacklistSystem();
         vm.prank(client);
-        uint256 id = e.createInvoice(freelancer, 1000 * E18, META);
+        uint256 id = e.createInvoice(freelancer, 1000 * E18, META, 10_000);
         vm.prank(client);
         e.fundInvoice(id);
         vm.prank(evaluator);
@@ -521,7 +521,7 @@ contract DuelyV2SecurityTest is Test {
 
         vm.prank(client);
         escrow.approveCompletion(id);
-        assertEq(vault.totalAssets(), 11_530 * E18);
+        assertEq(vault.totalAssets(), 11_600 * E18);
         assertEq(vault.outstandingPrincipal(), 0);
         _assertConsistent();
     }
@@ -539,8 +539,8 @@ contract DuelyV2SecurityTest is Test {
         // Settlement still repays and the vault recovers cash.
         vm.prank(client);
         escrow.approveCompletion(1);
-        assertEq(vault.totalAssets(), 930 * E18);
-        assertEq(vault.availableLiquidity(), 930 * E18);
+        assertEq(vault.totalAssets(), 1000 * E18);
+        assertEq(vault.availableLiquidity(), 1000 * E18);
         _assertConsistent();
     }
 
@@ -553,7 +553,7 @@ contract DuelyV2SecurityTest is Test {
         rlusd.clawback(address(escrow), 1500 * E18); // escrow holds 500 against 2,000 of liabilities
         assertLt(rlusd.balanceOf(address(escrow)), escrow.totalEscrow() + escrow.totalClaimable());
 
-        // Settlement needs to repay the vault 930: it cannot, and reverts with no partial effect.
+        // Settlement needs to repay the vault 1,000: it cannot, and reverts with no partial effect.
         vm.prank(client);
         vm.expectRevert();
         escrow.approveCompletion(a);
@@ -575,8 +575,7 @@ contract DuelyV2SecurityTest is Test {
         rlusd.mint(address(escrow), 1500 * E18);
         escrow.claim(client);
         vm.prank(client);
-        escrow.approveCompletion(a);
-        escrow.claim(freelancer);
+        escrow.approveCompletion(a); // 100% slider: nothing left for the freelancer to claim
         assertEq(rlusd.balanceOf(address(escrow)), 0);
         assertEq(escrow.totalEscrow(), 0);
         assertEq(escrow.totalClaimable(), 0);
@@ -724,9 +723,9 @@ contract DuelyV2SecurityTest is Test {
         assertEq(rlusd.balanceOf(address(escrow)), 0);
         assertEq(vault.outstandingPrincipal(), 0);
         // fees: ids[0] (300) and ids[4] (700) advanced and repaid; loss: ids[2] (500 -> 450).
-        assertEq(vault.totalFeesEarned(), 9 * E18 + 21 * E18);
+        assertEq(vault.totalFeesEarned(), 30 * E18 + 70 * E18);
         assertEq(vault.totalRealizedLosses(), 450 * E18);
-        assertEq(vault.totalAssets(), 12_000 * E18 + 30 * E18 - 450 * E18);
+        assertEq(vault.totalAssets(), 12_000 * E18 + 100 * E18 - 450 * E18);
     }
 
     // ================================================================== 6. documented weaknesses (current behavior)
@@ -908,12 +907,11 @@ contract DuelyV2SecurityTest is Test {
         assertEq(rlusd.balanceOf(sc) + rlusd.balanceOf(sf), start - 100 * E18);
         assertEq(vault.outstandingPrincipal(), 900 * E18, "...and the vault's 900 is locked");
 
-        // Best case if they finish: they pay the 30 fee.
+        // Best case if they finish: they pay the 100 fee.
         vm.prank(sc);
         escrow.approveCompletion(id);
-        escrow.claim(sf);
-        assertEq(rlusd.balanceOf(sc) + rlusd.balanceOf(sf), start - 30 * E18);
-        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(rlusd.balanceOf(sc) + rlusd.balanceOf(sf), start - 100 * E18);
+        assertEq(vault.totalFeesEarned(), 100 * E18);
     }
 
     function test_noStandingAllowanceOrEscrowResidueAfterAnyOutcome() public {
@@ -1036,7 +1034,7 @@ contract DuelyV2SecurityTest is Test {
         escrow.resolveDispute(a, true);
         vm.prank(operator);
         escrow.resolveDispute(b, false);
-        assertEq(vault.totalFeesEarned(), 30 * E18);
+        assertEq(vault.totalFeesEarned(), 100 * E18);
         assertEq(vault.totalRealizedLosses(), 900 * E18);
     }
 }

@@ -65,7 +65,7 @@ export function getAdvanceEligibility(args: {
   reserveAvailable: TokenAmount
 }): AdvanceEligibility {
   const { invoice, submissions, evaluations, advanceRequests, reserveAvailable } = args
-  const amount = advanceFor(invoice.amount)
+  const amount = advanceFor(invoice.amount, invoice.advanceShareBps)
   const blockers: AdvanceBlocker[] = []
   const status = invoice.onchainStatus
 

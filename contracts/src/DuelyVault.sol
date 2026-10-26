@@ -36,7 +36,7 @@ contract DuelyVault is IDuelyVault, ERC4626, AccessControl, Pausable, Reentrancy
     uint256 public constant MAX_UTILIZATION_BPS = 8_000;
     uint256 public constant MAX_INVOICE_EXPOSURE_BPS = 2_500;
     /// @notice Financing fee, in bps of invoice value, that the escrow must quote at funding.
-    uint256 public constant FEE_BPS = 300;
+    uint256 public constant FEE_BPS = 1_000;
 
     address public escrow;
     bool public advancesPaused;
